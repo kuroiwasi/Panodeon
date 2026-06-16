@@ -3,12 +3,29 @@ from __future__ import annotations
 import argparse
 import math
 import shutil
+import sqlite3
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from colmap_mask.core.colmap_export import virtual_cameras
 from colmap_mask.core.image_io import IMAGE_EXTENSIONS
+
+
+@dataclass(frozen=True)
+class ColmapGpuOptions:
+    extraction_use_option: str | None = "--SiftExtraction.use_gpu"
+    extraction_index_option: str | None = "--SiftExtraction.gpu_index"
+    matching_use_option: str | None = "--SiftMatching.use_gpu"
+    matching_index_option: str | None = "--SiftMatching.gpu_index"
+
+    @property
+    def extraction_supported(self) -> bool:
+        return self.extraction_use_option is not None and self.extraction_index_option is not None
+
+    @property
+    def matching_supported(self) -> bool:
+        return self.matching_use_option is not None and self.matching_index_option is not None
 
 
 @dataclass(frozen=True)
@@ -20,6 +37,10 @@ class ColmapRunSettings:
     camera_model: str = "PINHOLE"
     skip_mapping: bool = False
     pair_temporal_window: int = 3
+    use_gpu: bool = True
+    gpu_index: str = "-1"
+    gpu_options: ColmapGpuOptions = field(default_factory=ColmapGpuOptions)
+    skip_completed: bool = False
 
 
 @dataclass(frozen=True)
@@ -38,6 +59,9 @@ def main() -> int:
     parser.add_argument("--camera-model", default="PINHOLE")
     parser.add_argument("--overwrite", action="store_true", help="Delete existing database.db and sparse/ before running.")
     parser.add_argument("--skip-mapping", action="store_true", help="Run only feature extraction, rig setup, and matching.")
+    parser.add_argument("--skip-completed", action="store_true", help="Skip COLMAP steps that already have output.")
+    parser.add_argument("--no-gpu", action="store_true", help="Disable COLMAP SIFT GPU extraction and matching.")
+    parser.add_argument("--gpu-index", default="-1", help="COLMAP GPU index. -1 lets COLMAP choose/use all available GPUs.")
     args = parser.parse_args()
 
     export_dir = args.export_dir.resolve()
@@ -51,6 +75,9 @@ def main() -> int:
             shutil.rmtree(sparse_dir)
     sparse_dir.mkdir(parents=True, exist_ok=True)
 
+    gpu_options = detect_colmap_gpu_options(args.colmap)
+    if not args.no_gpu and not (gpu_options.extraction_supported and gpu_options.matching_supported):
+        print("GPU options unsupported by this COLMAP binary. Running without GPU flags.", flush=True)
     settings = ColmapRunSettings(
         colmap=args.colmap,
         tile_size=args.tile_size,
@@ -58,6 +85,10 @@ def main() -> int:
         matcher=args.matcher,
         camera_model=args.camera_model,
         skip_mapping=args.skip_mapping,
+        use_gpu=not args.no_gpu,
+        gpu_index=args.gpu_index,
+        gpu_options=gpu_options,
+        skip_completed=args.skip_completed,
     )
     for step in build_colmap_steps(export_dir, settings):
         run(step.command, export_dir)
@@ -80,80 +111,102 @@ def build_colmap_steps(export_dir: Path, settings: ColmapRunSettings) -> list[Co
     database_path = export_dir / "database.db"
     sparse_dir = export_dir / "sparse"
     camera_params = camera_params_for(settings.tile_size, settings.fov_deg)
-    steps = [
-        ColmapStep(
-            "Feature extraction",
-            [
-                settings.colmap,
-                "feature_extractor",
-                "--database_path",
-                str(database_path),
-                "--image_path",
-                str(export_dir / "images"),
-                "--ImageReader.mask_path",
-                str(export_dir / "masks"),
-                "--ImageReader.single_camera_per_folder",
-                "1",
-                "--ImageReader.camera_model",
-                settings.camera_model,
-                "--ImageReader.camera_params",
-                camera_params,
-                "--FeatureExtraction.max_image_size",
-                str(settings.tile_size),
-                "--SiftExtraction.max_num_features",
-                "16384",
-                "--SiftExtraction.estimate_affine_shape",
-                "1",
-                "--SiftExtraction.domain_size_pooling",
-                "1",
-            ],
-        ),
-        ColmapStep(
-            "Rig configuration",
-            [
-                settings.colmap,
-                "rig_configurator",
-                "--database_path",
-                str(database_path),
-                "--rig_config_path",
-                str(export_dir / "rig_config.json"),
-            ],
-        ),
+    feature_command = [
+        settings.colmap,
+        "feature_extractor",
+        "--database_path",
+        str(database_path),
+        "--image_path",
+        str(export_dir / "images"),
+        "--ImageReader.mask_path",
+        str(export_dir / "masks"),
+        "--ImageReader.single_camera_per_folder",
+        "1",
+        "--ImageReader.camera_model",
+        settings.camera_model,
+        "--ImageReader.camera_params",
+        camera_params,
+        "--FeatureExtraction.max_image_size",
+        str(settings.tile_size),
+        "--SiftExtraction.max_num_features",
+        "16384",
+        "--SiftExtraction.estimate_affine_shape",
+        "1",
+        "--SiftExtraction.domain_size_pooling",
+        "1",
     ]
+    if settings.use_gpu and settings.gpu_options.extraction_supported:
+        feature_command.extend(
+            [
+                settings.gpu_options.extraction_use_option,
+                "1",
+                settings.gpu_options.extraction_index_option,
+                settings.gpu_index,
+            ]
+        )
+    steps: list[ColmapStep] = []
+    if not (settings.skip_completed and database_has_rows(database_path, "images")):
+        steps.append(ColmapStep("Feature extraction", feature_command))
+    if not (settings.skip_completed and database_has_rows(database_path, "frames")):
+        steps.append(
+            ColmapStep(
+                "Rig configuration",
+                [
+                    settings.colmap,
+                    "rig_configurator",
+                    "--database_path",
+                    str(database_path),
+                    "--rig_config_path",
+                    str(export_dir / "rig_config.json"),
+                ],
+            )
+        )
     if settings.matcher == "pairs":
         match_list_path = write_match_pair_list(export_dir, settings.pair_temporal_window)
-        steps.append(
-            ColmapStep(
-                "Pair-list matching",
+        match_command = [
+            settings.colmap,
+            "matches_importer",
+            "--database_path",
+            str(database_path),
+            "--match_list_path",
+            str(match_list_path),
+            "--match_type",
+            "pairs",
+            "--FeatureMatching.guided_matching",
+            "1",
+        ]
+        if settings.use_gpu and settings.gpu_options.matching_supported:
+            match_command.extend(
                 [
-                    settings.colmap,
-                    "matches_importer",
-                    "--database_path",
-                    str(database_path),
-                    "--match_list_path",
-                    str(match_list_path),
-                    "--match_type",
-                    "pairs",
-                    "--FeatureMatching.guided_matching",
+                    settings.gpu_options.matching_use_option,
                     "1",
-                ],
+                    settings.gpu_options.matching_index_option,
+                    settings.gpu_index,
+                ]
             )
-        )
+        if not (settings.skip_completed and database_has_rows(database_path, "matches")):
+            steps.append(ColmapStep("Pair-list matching", match_command))
     else:
-        steps.append(
-            ColmapStep(
-                f"{settings.matcher.title()} matching",
+        match_command = [
+            settings.colmap,
+            f"{settings.matcher}_matcher",
+            "--database_path",
+            str(database_path),
+            "--FeatureMatching.guided_matching",
+            "1",
+        ]
+        if settings.use_gpu and settings.gpu_options.matching_supported:
+            match_command.extend(
                 [
-                    settings.colmap,
-                    f"{settings.matcher}_matcher",
-                    "--database_path",
-                    str(database_path),
-                    "--FeatureMatching.guided_matching",
+                    settings.gpu_options.matching_use_option,
                     "1",
-                ],
+                    settings.gpu_options.matching_index_option,
+                    settings.gpu_index,
+                ]
             )
-        )
-    if not settings.skip_mapping:
+        if not (settings.skip_completed and database_has_rows(database_path, "matches")):
+            steps.append(ColmapStep(f"{settings.matcher.title()} matching", match_command))
+    if not settings.skip_mapping and not (settings.skip_completed and sparse_model_exists(sparse_dir)):
         steps.append(
             ColmapStep(
                 "Sparse mapping",
@@ -184,11 +237,98 @@ def build_colmap_steps(export_dir: Path, settings: ColmapRunSettings) -> list[Co
     return steps
 
 
+def database_has_rows(database_path: Path, table_name: str) -> bool:
+    if not database_path.exists():
+        return False
+    try:
+        with sqlite3.connect(str(database_path)) as connection:
+            row = connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                (table_name,),
+            ).fetchone()
+            if row is None:
+                return False
+            count = connection.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+    except sqlite3.Error:
+        return False
+    return int(count) > 0
+
+
+def sparse_model_exists(sparse_dir: Path) -> bool:
+    if not sparse_dir.exists():
+        return False
+    for model_dir in [sparse_dir, *sorted(path for path in sparse_dir.iterdir() if path.is_dir())]:
+        if (
+            (model_dir / "cameras.bin").exists()
+            and (model_dir / "images.bin").exists()
+            and (model_dir / "points3D.bin").exists()
+        ):
+            return True
+    return False
+
+
 def write_match_pair_list(export_dir: Path, temporal_window: int = 3) -> Path:
     pairs = build_match_pairs(export_dir / "images", temporal_window=temporal_window)
     path = export_dir / "match_pairs.txt"
     path.write_text("\n".join(f"{left} {right}" for left, right in pairs) + ("\n" if pairs else ""), encoding="utf-8")
     return path
+
+
+def detect_colmap_gpu_options(colmap: str) -> ColmapGpuOptions:
+    extraction_use, extraction_index = select_supported_options(
+        colmap,
+        "feature_extractor",
+        (
+            ("--FeatureExtraction.use_gpu", "--FeatureExtraction.gpu_index"),
+            ("--SiftExtraction.use_gpu", "--SiftExtraction.gpu_index"),
+        ),
+    )
+    matching_use, matching_index = select_supported_options(
+        colmap,
+        "matches_importer",
+        (
+            ("--FeatureMatching.use_gpu", "--FeatureMatching.gpu_index"),
+            ("--SiftMatching.use_gpu", "--SiftMatching.gpu_index"),
+        ),
+    )
+    return ColmapGpuOptions(
+        extraction_use_option=extraction_use,
+        extraction_index_option=extraction_index,
+        matching_use_option=matching_use,
+        matching_index_option=matching_index,
+    )
+
+
+def select_supported_options(
+    colmap: str,
+    command: str,
+    candidates: tuple[tuple[str, str], ...],
+) -> tuple[str | None, str | None]:
+    help_text = colmap_command_help(colmap, command)
+    if not help_text:
+        return None, None
+    for use_option, index_option in candidates:
+        if use_option in help_text and index_option in help_text:
+            return use_option, index_option
+    return None, None
+
+
+def colmap_command_supports_option(colmap: str, command: str, option: str) -> bool:
+    return option in colmap_command_help(colmap, command)
+
+
+def colmap_command_help(colmap: str, command: str) -> str:
+    try:
+        result = subprocess.run(
+            [colmap, command, "--help"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return f"{result.stdout}\n{result.stderr}"
 
 
 def build_match_pairs(images_dir: Path, temporal_window: int = 3) -> list[tuple[str, str]]:

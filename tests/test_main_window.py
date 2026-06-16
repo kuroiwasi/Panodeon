@@ -4,7 +4,14 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
 
-from colmap_mask.ui.main_window import MainWindow, colmap_image_mask_counts, dropped_path_from_mime, folder_from_mime, short_error
+from colmap_mask.ui.main_window import (
+    MainWindow,
+    colmap_image_mask_counts,
+    default_colmap_executable,
+    dropped_path_from_mime,
+    folder_from_mime,
+    short_error,
+)
 
 
 def test_short_error_limits_multiline_message() -> None:
@@ -58,8 +65,16 @@ def test_colmap_overwrite_is_checked_by_default() -> None:
         assert window.colmap_overwrite_check.isChecked()
         assert window.tile_size_spin.value() == 3072
         assert window.colmap_matcher_combo.currentText() == "pairs"
+        assert window.colmap_use_gpu_check.isChecked()
+        assert window.colmap_gpu_index_edit.text() == "-1"
+        assert not window.colmap_skip_completed_check.isChecked()
+        assert window.colmap_path_edit.text() == default_colmap_executable()
     finally:
         window.close()
+
+
+def test_default_colmap_executable_returns_string() -> None:
+    assert default_colmap_executable()
 
 
 class FakeMime:

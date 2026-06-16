@@ -41,8 +41,10 @@ def test_write_colmap_metadata_writes_rig_config(tmp_path: Path) -> None:
     write_colmap_metadata(tmp_path, ColmapExportSettings(tile_size=1024, fov_deg=90))
 
     payload = json.loads((tmp_path / "rig_config.json").read_text(encoding="utf-8"))
-    assert payload[0]["ref_camera_id"] == 1
     assert len(payload[0]["cameras"]) == len(virtual_cameras())
+    assert payload[0]["cameras"][0]["image_prefix"] == "cam01_y000_p+00/"
+    assert payload[0]["cameras"][0]["ref_sensor"] is True
     assert "cam_from_rig_rotation" not in payload[0]["cameras"][0]
+    assert "ref_sensor" not in payload[0]["cameras"][1]
     assert "cam_from_rig_rotation" in payload[0]["cameras"][1]
     assert (tmp_path / "README_colmap.txt").exists()

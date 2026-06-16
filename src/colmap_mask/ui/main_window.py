@@ -43,7 +43,13 @@ from colmap_mask.generators.direct import DirectEquirectangularGenerator
 from colmap_mask.generators.subprocess_cubemap import PersistentCubemapGenerator
 from colmap_mask.inference.deim_wholebody import DeimWholebodySegmenter
 from colmap_mask.inference.providers import available_onnx_providers, provider_label, resolve_execution_providers, selectable_onnx_providers
-from colmap_mask.tools.run_colmap import ColmapRunSettings, ColmapStep, build_colmap_steps, validate_export_dir
+from colmap_mask.tools.run_colmap import (
+    ColmapRunSettings,
+    ColmapStep,
+    build_colmap_steps,
+    detect_colmap_gpu_options,
+    validate_export_dir,
+)
 from colmap_mask.ui.image_canvas import ImageCanvas
 from colmap_mask.ui.workers import TaskWorker
 
@@ -403,7 +409,7 @@ class MainWindow(QMainWindow):
         layout_colmap.setContentsMargins(10, 15, 10, 10)
         layout_colmap.setSpacing(8)
 
-        self.colmap_path_edit = QLineEdit("colmap")
+        self.colmap_path_edit = QLineEdit(default_colmap_executable())
         self.colmap_browse_button = QPushButton("...")
         self.colmap_browse_button.setObjectName("toolButton")
         colmap_path_layout = QHBoxLayout()
@@ -416,7 +422,11 @@ class MainWindow(QMainWindow):
         self.colmap_matcher_combo.addItems(["pairs", "exhaustive", "sequential", "vocab_tree"])
         self.colmap_overwrite_check = QCheckBox("Overwrite database/sparse")
         self.colmap_overwrite_check.setChecked(True)
+        self.colmap_skip_completed_check = QCheckBox("Skip completed steps")
         self.colmap_skip_mapping_check = QCheckBox("Skip mapping")
+        self.colmap_use_gpu_check = QCheckBox("Use GPU if available")
+        self.colmap_use_gpu_check.setChecked(True)
+        self.colmap_gpu_index_edit = QLineEdit("-1")
         self.colmap_image_path_label = QLabel("-")
         self.colmap_image_path_label.setWordWrap(True)
         self.colmap_image_count_label = QLabel("0")
@@ -435,7 +445,10 @@ class MainWindow(QMainWindow):
         layout_colmap.addRow("Executable", colmap_path_layout)
         layout_colmap.addRow("Matcher", self.colmap_matcher_combo)
         layout_colmap.addRow("", self.colmap_overwrite_check)
+        layout_colmap.addRow("", self.colmap_skip_completed_check)
         layout_colmap.addRow("", self.colmap_skip_mapping_check)
+        layout_colmap.addRow("", self.colmap_use_gpu_check)
+        layout_colmap.addRow("GPU Index", self.colmap_gpu_index_edit)
         layout_colmap.addRow("Image Path", self.colmap_image_path_label)
         layout_colmap.addRow("Images", self.colmap_image_count_label)
         layout_colmap.addRow("Masks", self.colmap_mask_count_label)
@@ -539,7 +552,10 @@ class MainWindow(QMainWindow):
         self.colmap_browse_button.setToolTip("Select colmap.exe.")
         self.colmap_matcher_combo.setToolTip("COLMAP matcher command.")
         self.colmap_overwrite_check.setToolTip("Delete existing database.db and sparse before running COLMAP.")
+        self.colmap_skip_completed_check.setToolTip("Skip steps with existing database/sparse outputs. Disable overwrite to reuse them.")
         self.colmap_skip_mapping_check.setToolTip("Stop after feature extraction, rig configuration, and matching.")
+        self.colmap_use_gpu_check.setToolTip("Use COLMAP GPU SIFT extraction and matching when the binary supports it.")
+        self.colmap_gpu_index_edit.setToolTip("COLMAP GPU index. -1 lets COLMAP choose/use all available GPUs.")
         self.run_colmap_button.setToolTip("Run COLMAP on the current exports folder.")
         self.image_list.setToolTip("Images found in the selected folder.")
         self.canvas.setToolTip("Preview canvas. Wheel to zoom. Draw with left mouse button.")
@@ -935,7 +951,10 @@ class MainWindow(QMainWindow):
             self.colmap_path_edit,
             self.colmap_matcher_combo,
             self.colmap_overwrite_check,
+            self.colmap_skip_completed_check,
             self.colmap_skip_mapping_check,
+            self.colmap_use_gpu_check,
+            self.colmap_gpu_index_edit,
         ):
             widget.setEnabled(not busy)
         self.cancel_button.setEnabled(busy)
@@ -993,19 +1012,32 @@ class MainWindow(QMainWindow):
             self.status_label.setText(short_error(exc))
             QMessageBox.warning(self, "COLMAP", str(exc))
             return
+        colmap_path = self.colmap_path_edit.text().strip() or "colmap"
+        self.colmap_log.clear()
+        gpu_options = detect_colmap_gpu_options(colmap_path)
+        if self.colmap_use_gpu_check.isChecked() and not (gpu_options.extraction_supported and gpu_options.matching_supported):
+            self.append_colmap_log("GPU options unsupported by this COLMAP binary. Running without GPU flags.")
         settings = ColmapRunSettings(
-            colmap=self.colmap_path_edit.text().strip() or "colmap",
+            colmap=colmap_path,
             tile_size=self.tile_size_spin.value(),
             fov_deg=float(self.fov_spin.value()),
             matcher=self.colmap_matcher_combo.currentText(),
             skip_mapping=self.colmap_skip_mapping_check.isChecked(),
+            skip_completed=self.colmap_skip_completed_check.isChecked(),
+            use_gpu=self.colmap_use_gpu_check.isChecked(),
+            gpu_index=self.colmap_gpu_index_edit.text().strip() or "-1",
+            gpu_options=gpu_options,
         )
         self.colmap_steps = build_colmap_steps(export_dir, settings)
         self.colmap_step_index = 0
         self._colmap_cancelled = False
-        self.colmap_log.clear()
         self.colmap_progress.setRange(0, len(self.colmap_steps))
         self.colmap_progress.setValue(0)
+        if not self.colmap_steps:
+            self.colmap_stage_label.setText("Done")
+            self.status_label.setText("COLMAP already complete")
+            self.append_colmap_log("All COLMAP steps already have output. Nothing to run.")
+            return
         self.set_busy(True)
         self.start_next_colmap_step()
 
@@ -1141,6 +1173,18 @@ def colmap_image_mask_counts(images_dir: Path, masks_dir: Path) -> tuple[int, in
         if mask_path.exists():
             mask_count += 1
     return len(image_paths), mask_count
+
+
+def default_colmap_executable() -> str:
+    project_root = Path(__file__).resolve().parents[3]
+    candidates = [
+        project_root / "tools" / "colmap" / "bin" / "colmap.exe",
+        project_root / "tools" / "colmap" / "bin" / "colmap",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return "colmap"
 
 
 def dropped_path_from_mime(mime_data) -> Path | None:

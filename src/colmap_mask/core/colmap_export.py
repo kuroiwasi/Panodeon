@@ -84,7 +84,6 @@ def write_colmap_metadata(export_dir: Path, settings: ColmapExportSettings) -> N
     ref_camera = cameras[0]
     payload = [
         {
-            "ref_camera_id": ref_camera.camera_id,
             "cameras": [camera_config_json(camera, ref_camera) for camera in cameras],
         }
     ]
@@ -94,10 +93,10 @@ def write_colmap_metadata(export_dir: Path, settings: ColmapExportSettings) -> N
 
 def camera_config_json(camera: VirtualCamera, ref_camera: VirtualCamera) -> dict[str, object]:
     config: dict[str, object] = {
-        "camera_id": camera.camera_id,
         "image_prefix": f"{camera.name}/",
     }
     if camera.camera_id == ref_camera.camera_id:
+        config["ref_sensor"] = True
         return config
     config.update(camera_pose_json(camera, ref_camera))
     return config
