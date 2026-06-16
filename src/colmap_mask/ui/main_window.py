@@ -1,0 +1,1157 @@
+from __future__ import annotations
+
+import shutil
+from pathlib import Path
+
+import cv2
+import numpy as np
+from PySide6.QtCore import QProcess, QThread, QTimer, Qt
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QCheckBox,
+    QComboBox,
+    QFileDialog,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMainWindow,
+    QMessageBox,
+    QPlainTextEdit,
+    QProgressBar,
+    QPushButton,
+    QInputDialog,
+    QSplitter,
+    QSpinBox,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
+from colmap_mask.core.colmap_export import ColmapExportSettings, export_item_for_colmap, write_colmap_metadata
+from colmap_mask.core.image_io import IMAGE_EXTENSIONS, load_mask, load_rgb, save_mask
+from colmap_mask.core.mask_ops import mask_area
+from colmap_mask.core.overlay import overlay_mask
+from colmap_mask.core.project_state import ImageItem, ProjectState
+from colmap_mask.core.video_extract import extract_video_frames, is_video_path
+from colmap_mask.generators.base import MaskOptions
+from colmap_mask.generators.cubemap import CubemapGenerator, merge_compare_masks
+from colmap_mask.generators.direct import DirectEquirectangularGenerator
+from colmap_mask.generators.subprocess_cubemap import PersistentCubemapGenerator
+from colmap_mask.inference.deim_wholebody import DeimWholebodySegmenter
+from colmap_mask.inference.providers import available_onnx_providers, provider_label, resolve_execution_providers, selectable_onnx_providers
+from colmap_mask.tools.run_colmap import ColmapRunSettings, ColmapStep, build_colmap_steps, validate_export_dir
+from colmap_mask.ui.image_canvas import ImageCanvas
+from colmap_mask.ui.workers import TaskWorker
+
+
+MODERN_STYLE = """
+QMainWindow {
+    background-color: #2e2e2e;
+}
+QDialog, QMessageBox {
+    background-color: #2e2e2e;
+}
+QWidget {
+    color: #e0e0e0;
+    font-family: 'Segoe UI', 'Inter', 'Meiryo', sans-serif;
+    font-size: 9pt;
+}
+QSplitter::handle {
+    background-color: #1d1d1d;
+}
+QSplitter::handle:horizontal {
+    width: 2px;
+}
+QGroupBox {
+    border: 1px solid #1d1d1d;
+    border-radius: 4px;
+    margin-top: 10px;
+    padding-top: 14px;
+    font-weight: bold;
+    color: #e57d22;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 8px;
+    padding: 0 4px;
+    background-color: #2e2e2e;
+}
+QPushButton {
+    background-color: #545454;
+    border: 1px solid #2e2e2e;
+    border-radius: 4px;
+    padding: 6px 12px;
+    font-weight: bold;
+    color: #ffffff;
+}
+QPushButton:hover {
+    background-color: #646464;
+    border-color: #e57d22;
+}
+QPushButton:pressed {
+    background-color: #3e3e3e;
+}
+QPushButton:disabled {
+    background-color: #2e2e2e;
+    color: #808080;
+    border-color: #1d1d1d;
+}
+QPushButton#primaryButton {
+    background-color: #545454;
+    border: 1px solid #e57d22;
+    color: #ffffff;
+}
+QPushButton#primaryButton:hover {
+    background-color: #e57d22;
+    border-color: #f2984b;
+    color: #ffffff;
+}
+QPushButton#primaryButton:pressed {
+    background-color: #b85c13;
+}
+QPushButton#toolButton {
+    color: #78a3c8;
+}
+QComboBox {
+    background-color: #1d1d1d;
+    border: 1px solid #2e2e2e;
+    border-radius: 4px;
+    padding: 4px 8px;
+    min-height: 22px;
+}
+QComboBox:hover {
+    border-color: #e57d22;
+}
+QComboBox::drop-down {
+    border-left: 1px solid #2e2e2e;
+    width: 20px;
+}
+QComboBox QAbstractItemView {
+    background-color: #1d1d1d;
+    border: 1px solid #2e2e2e;
+    selection-background-color: #e57d22;
+    selection-color: #ffffff;
+}
+QSpinBox {
+    background-color: #1d1d1d;
+    border: 1px solid #2e2e2e;
+    border-radius: 4px;
+    padding: 4px 8px;
+    min-height: 22px;
+    color: #ffffff;
+}
+QSpinBox:hover {
+    border-color: #e57d22;
+}
+QLineEdit, QPlainTextEdit {
+    background-color: #1d1d1d;
+    border: 1px solid #2e2e2e;
+    border-radius: 4px;
+    padding: 4px 8px;
+    color: #ffffff;
+}
+QProgressBar {
+    background-color: #1d1d1d;
+    border: 1px solid #2e2e2e;
+    border-radius: 4px;
+    text-align: center;
+    color: #ffffff;
+}
+QProgressBar::chunk {
+    background-color: #e57d22;
+    border-radius: 3px;
+}
+QListWidget {
+    background-color: #1d1d1d;
+    border: 1px solid #2e2e2e;
+    border-radius: 4px;
+    padding: 4px;
+}
+QListWidget::item {
+    border-radius: 4px;
+    padding: 6px 8px;
+    margin: 2px 0px;
+}
+QListWidget::item:hover {
+    background-color: #3e3e3e;
+}
+QListWidget::item:selected {
+    background-color: #e57d22;
+    color: #ffffff;
+}
+QCheckBox {
+    spacing: 8px;
+}
+QCheckBox::indicator {
+    width: 14px;
+    height: 14px;
+    border: 1px solid #2e2e2e;
+    border-radius: 3px;
+    background-color: #1d1d1d;
+}
+QCheckBox::indicator:hover {
+    border-color: #e57d22;
+}
+QCheckBox::indicator:checked {
+    background-color: #e57d22;
+    border-color: #f2984b;
+}
+QTabWidget::pane {
+    border: 1px solid #1d1d1d;
+    border-radius: 4px;
+}
+QTabBar::tab {
+    background-color: #1d1d1d;
+    border: 1px solid #2e2e2e;
+    border-bottom: none;
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+    padding: 6px 12px;
+}
+QTabBar::tab:selected {
+    background-color: #545454;
+    color: #ffffff;
+}
+QTabBar::tab:hover {
+    border-color: #e57d22;
+}
+QScrollBar:vertical {
+    background: #1d1d1d;
+    width: 8px;
+    margin: 0px;
+}
+QScrollBar::handle:vertical {
+    background: #545454;
+    min-height: 20px;
+    border-radius: 4px;
+}
+QScrollBar::handle:vertical:hover {
+    background: #646464;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    background: none;
+    height: 0px;
+}
+QLabel {
+    color: #ffffff;
+}
+"""
+
+
+class MainWindow(QMainWindow):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle("360 Colmap Mask")
+        self.setAcceptDrops(True)
+        self.setStyleSheet(MODERN_STYLE)
+        self.state = ProjectState()
+        self.current_item: ImageItem | None = None
+        self.current_image: np.ndarray | None = None
+        self.current_mask: np.ndarray | None = None
+        self.mask_dirty = False
+        self._restoring_list_row = False
+        self.undo_stack: list[np.ndarray] = []
+        self.redo_stack: list[np.ndarray] = []
+        self.disabled_provider_names: set[str] = set()
+        self.direct_generator = DirectEquirectangularGenerator()
+        self.cubemap_generator = CubemapGenerator()
+        self.segmenter = None
+        self.worker_thread: QThread | None = None
+        self.worker: TaskWorker | None = None
+        self.colmap_process: QProcess | None = None
+        self.colmap_steps: list[ColmapStep] = []
+        self.colmap_step_index = 0
+        self._colmap_cancelled = False
+        self._busy = False
+        self.preview_timer = QTimer(self)
+        self.preview_timer.setSingleShot(True)
+        self.preview_timer.timeout.connect(self.refresh_preview)
+        self._build_ui()
+        self.refresh_model_list()
+
+    def _build_ui(self) -> None:
+        root = QWidget()
+        self.setCentralWidget(root)
+        main_layout = QHBoxLayout(root)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setSpacing(10)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        main_layout.addWidget(splitter)
+
+        left = QWidget()
+        left_layout = QVBoxLayout()
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(8)
+        self.open_button = QPushButton("Open Folder")
+        self.open_button.setObjectName("primaryButton")
+        self.image_list = QListWidget()
+        self.image_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        left_layout.addWidget(self.open_button)
+        left_layout.addWidget(self.image_list)
+        left.setLayout(left_layout)
+        splitter.addWidget(left)
+
+        self.canvas = ImageCanvas()
+        self.canvas.setStyleSheet("border: 1px solid #1d1d1d; border-radius: 4px;")
+        splitter.addWidget(self.canvas)
+
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(8)
+
+        self.right_tabs = QTabWidget()
+        mask_tab = QWidget()
+        mask_layout = QVBoxLayout(mask_tab)
+        mask_layout.setContentsMargins(8, 8, 8, 8)
+        mask_layout.setSpacing(8)
+        colmap_tab = QWidget()
+        colmap_layout = QVBoxLayout(colmap_tab)
+        colmap_layout.setContentsMargins(8, 8, 8, 8)
+        colmap_layout.setSpacing(8)
+        self.right_tabs.addTab(mask_tab, "Mask")
+        self.right_tabs.addTab(colmap_tab, "COLMAP")
+        right_layout.addWidget(self.right_tabs, 1)
+
+        # 1. AI Model Config Group
+        group_model = QGroupBox("AI Model Settings")
+        layout_model = QFormLayout(group_model)
+        layout_model.setContentsMargins(10, 15, 10, 10)
+        layout_model.setSpacing(8)
+
+        self.strategy_combo = QComboBox()
+        self.strategy_combo.addItems(["direct", "cubemap", "both"])
+        self.strategy_combo.setCurrentText("both")
+        self.model_combo = QComboBox()
+        self.provider_combo = QComboBox()
+        self.refresh_provider_list()
+
+        self.model_button = QPushButton("Refresh")
+        model_layout = QHBoxLayout()
+        model_layout.setContentsMargins(0, 0, 0, 0)
+        model_layout.setSpacing(4)
+        model_layout.addWidget(self.model_combo)
+        model_layout.addWidget(self.model_button)
+
+        layout_model.addRow("Mode", self.strategy_combo)
+        layout_model.addRow("ONNX Model", model_layout)
+        layout_model.addRow("EP Provider", self.provider_combo)
+        mask_layout.addWidget(group_model)
+
+        # 2. AI Parameters Group
+        group_params = QGroupBox("Detection Parameters")
+        layout_params = QFormLayout(group_params)
+        layout_params.setContentsMargins(10, 15, 10, 10)
+        layout_params.setSpacing(8)
+
+        self.score_spin = QSpinBox()
+        self.score_spin.setRange(1, 99)
+        self.score_spin.setValue(35)
+        self.mask_threshold_spin = QSpinBox()
+        self.mask_threshold_spin.setRange(1, 99)
+        self.mask_threshold_spin.setValue(40)
+
+        layout_params.addRow("Conf Score %", self.score_spin)
+        layout_params.addRow("Mask Thresh %", self.mask_threshold_spin)
+        mask_layout.addWidget(group_params)
+
+        # 3. Manual Mask Editor Group
+        group_manual = QGroupBox("Manual Mask Editor")
+        layout_manual = QFormLayout(group_manual)
+        layout_manual.setContentsMargins(10, 15, 10, 10)
+        layout_manual.setSpacing(8)
+
+        self.brush_spin = QSpinBox()
+        self.brush_spin.setRange(1, 256)
+        self.brush_spin.setValue(24)
+        self.erase_check = QCheckBox("Eraser Mode")
+        self.overlay_opacity_spin = QSpinBox()
+        self.overlay_opacity_spin.setRange(0, 100)
+        self.overlay_opacity_spin.setValue(35)
+
+        layout_manual.addRow("Brush Size", self.brush_spin)
+        layout_manual.addRow("", self.erase_check)
+        layout_manual.addRow("Red Overlay", self.overlay_opacity_spin)
+        mask_layout.addWidget(group_manual)
+
+        # 4. Export Settings Group
+        group_export = QGroupBox("Export Settings")
+        layout_export = QFormLayout(group_export)
+        layout_export.setContentsMargins(10, 15, 10, 10)
+        layout_export.setSpacing(8)
+
+        self.tile_size_spin = QSpinBox()
+        self.tile_size_spin.setRange(256, 8192)
+        self.tile_size_spin.setSingleStep(256)
+        self.tile_size_spin.setValue(3072)
+        self.fov_spin = QSpinBox()
+        self.fov_spin.setRange(30, 150)
+        self.fov_spin.setValue(90)
+
+        layout_export.addRow("Tile Size", self.tile_size_spin)
+        layout_export.addRow("FOV deg", self.fov_spin)
+        mask_layout.addWidget(group_export)
+
+        group_colmap = QGroupBox("COLMAP")
+        layout_colmap = QFormLayout(group_colmap)
+        layout_colmap.setContentsMargins(10, 15, 10, 10)
+        layout_colmap.setSpacing(8)
+
+        self.colmap_path_edit = QLineEdit("colmap")
+        self.colmap_browse_button = QPushButton("...")
+        self.colmap_browse_button.setObjectName("toolButton")
+        colmap_path_layout = QHBoxLayout()
+        colmap_path_layout.setContentsMargins(0, 0, 0, 0)
+        colmap_path_layout.setSpacing(4)
+        colmap_path_layout.addWidget(self.colmap_path_edit)
+        colmap_path_layout.addWidget(self.colmap_browse_button)
+
+        self.colmap_matcher_combo = QComboBox()
+        self.colmap_matcher_combo.addItems(["pairs", "exhaustive", "sequential", "vocab_tree"])
+        self.colmap_overwrite_check = QCheckBox("Overwrite database/sparse")
+        self.colmap_overwrite_check.setChecked(True)
+        self.colmap_skip_mapping_check = QCheckBox("Skip mapping")
+        self.colmap_image_path_label = QLabel("-")
+        self.colmap_image_path_label.setWordWrap(True)
+        self.colmap_image_count_label = QLabel("0")
+        self.colmap_mask_count_label = QLabel("0")
+        self.colmap_progress = QProgressBar()
+        self.colmap_progress.setRange(0, 1)
+        self.colmap_progress.setValue(0)
+        self.colmap_stage_label = QLabel("Idle")
+        self.colmap_stage_label.setWordWrap(True)
+        self.colmap_log = QPlainTextEdit()
+        self.colmap_log.setReadOnly(True)
+        self.colmap_log.setMaximumHeight(120)
+        self.run_colmap_button = QPushButton("Run COLMAP")
+        self.run_colmap_button.setObjectName("primaryButton")
+
+        layout_colmap.addRow("Executable", colmap_path_layout)
+        layout_colmap.addRow("Matcher", self.colmap_matcher_combo)
+        layout_colmap.addRow("", self.colmap_overwrite_check)
+        layout_colmap.addRow("", self.colmap_skip_mapping_check)
+        layout_colmap.addRow("Image Path", self.colmap_image_path_label)
+        layout_colmap.addRow("Images", self.colmap_image_count_label)
+        layout_colmap.addRow("Masks", self.colmap_mask_count_label)
+        layout_colmap.addRow("Progress", self.colmap_progress)
+        layout_colmap.addRow("Stage", self.colmap_stage_label)
+        layout_colmap.addRow("Log", self.colmap_log)
+        layout_colmap.addRow("", self.run_colmap_button)
+        colmap_layout.addWidget(group_colmap)
+        colmap_layout.addStretch()
+
+        # Actions area (horizontal layouts)
+        ai_buttons = QHBoxLayout()
+        ai_buttons.setSpacing(6)
+        self.generate_selected_button = QPushButton("Generate Select")
+        self.generate_selected_button.setObjectName("primaryButton")
+        self.generate_all_button = QPushButton("Generate All")
+        ai_buttons.addWidget(self.generate_selected_button)
+        ai_buttons.addWidget(self.generate_all_button)
+        mask_layout.addLayout(ai_buttons)
+
+        edit_buttons = QHBoxLayout()
+        edit_buttons.setSpacing(6)
+        self.undo_button = QPushButton("Undo")
+        self.undo_button.setObjectName("toolButton")
+        self.redo_button = QPushButton("Redo")
+        self.redo_button.setObjectName("toolButton")
+        self.save_mask_button = QPushButton("Save Mask")
+        self.save_mask_button.setObjectName("primaryButton")
+        edit_buttons.addWidget(self.undo_button)
+        edit_buttons.addWidget(self.redo_button)
+        edit_buttons.addWidget(self.save_mask_button)
+        mask_layout.addLayout(edit_buttons)
+
+        export_buttons = QHBoxLayout()
+        export_buttons.setSpacing(6)
+        self.export_selected_button = QPushButton("Export Select")
+        self.export_selected_button.setObjectName("primaryButton")
+        self.export_all_button = QPushButton("Export All")
+        export_buttons.addWidget(self.export_selected_button)
+        export_buttons.addWidget(self.export_all_button)
+        mask_layout.addLayout(export_buttons)
+        mask_layout.addStretch()
+
+        self.cancel_button = QPushButton("Cancel Task")
+        self.cancel_button.setObjectName("toolButton")
+        self.cancel_button.setEnabled(False)
+        right_layout.addWidget(self.cancel_button)
+
+        self.status_label = QLabel("No folder")
+        self.status_label.setWordWrap(True)
+        self.status_label.setStyleSheet("color: #808080; font-size: 8pt; padding: 4px;")
+        right_layout.addWidget(self.status_label)
+
+        splitter.addWidget(right)
+        splitter.setSizes([220, 820, 280])
+
+        self.open_button.clicked.connect(self.open_folder)
+        self.model_button.clicked.connect(self.refresh_model_list)
+        self.model_combo.currentIndexChanged.connect(lambda index: self.load_segmenter())
+        self.provider_combo.currentIndexChanged.connect(lambda index: self.load_segmenter())
+        self.image_list.currentItemChanged.connect(self.select_image)
+        self.canvas.strokeStarted.connect(self.begin_mask_edit)
+        self.canvas.strokeCommitted.connect(self.commit_canvas_stroke)
+        self.brush_spin.valueChanged.connect(self.update_brush)
+        self.erase_check.stateChanged.connect(self.update_brush)
+        self.overlay_opacity_spin.valueChanged.connect(lambda value: self.schedule_preview_refresh())
+        self.generate_selected_button.clicked.connect(self.generate_selected)
+        self.generate_all_button.clicked.connect(self.generate_all)
+        self.save_mask_button.clicked.connect(self.save_current_mask)
+        self.export_selected_button.clicked.connect(self.export_selected)
+        self.export_all_button.clicked.connect(self.export_all)
+        self.colmap_browse_button.clicked.connect(self.browse_colmap_executable)
+        self.run_colmap_button.clicked.connect(self.run_colmap_gui)
+        self.undo_button.clicked.connect(self.undo)
+        self.redo_button.clicked.connect(self.redo)
+        self.cancel_button.clicked.connect(self.cancel_current_task)
+        self.update_brush()
+        self._set_tooltips()
+        self._update_generate_buttons()
+
+    def _set_tooltips(self) -> None:
+        self.open_button.setToolTip("Open a folder containing panorama images.")
+        self.strategy_combo.setToolTip("Mask generation method: direct equirectangular, cubemap, or both.")
+        self.model_combo.setToolTip("ONNX model loaded from the local models folder.")
+        self.provider_combo.setToolTip("ONNX Runtime execution provider. DirectML supports NVIDIA and AMD on Windows.")
+        self.model_button.setToolTip("Refresh the ONNX model list from the models folder.")
+        self.save_mask_button.setToolTip("Save the current edited mask PNG.")
+        self.export_selected_button.setToolTip("Export selected images as COLMAP perspective tiles and masks.")
+        self.export_all_button.setToolTip("Export all images as COLMAP perspective tiles and masks.")
+        self.cancel_button.setToolTip("Stop the running generate/export task. Finished images are kept.")
+        self.undo_button.setToolTip("Undo the last mask edit.")
+        self.redo_button.setToolTip("Redo the last undone mask edit.")
+        self.erase_check.setToolTip("Erase mask areas instead of adding them.")
+        self.overlay_opacity_spin.setToolTip("Opacity of the mask overlay in percent.")
+        self.brush_spin.setToolTip("Brush radius in source image pixels.")
+        self.score_spin.setToolTip("Minimum detection confidence in percent.")
+        self.mask_threshold_spin.setToolTip("Minimum segmentation mask probability in percent.")
+        self.tile_size_spin.setToolTip("Square perspective tile size in pixels.")
+        self.fov_spin.setToolTip("Perspective tile field of view in degrees.")
+        self.colmap_path_edit.setToolTip("COLMAP executable name or full path.")
+        self.colmap_browse_button.setToolTip("Select colmap.exe.")
+        self.colmap_matcher_combo.setToolTip("COLMAP matcher command.")
+        self.colmap_overwrite_check.setToolTip("Delete existing database.db and sparse before running COLMAP.")
+        self.colmap_skip_mapping_check.setToolTip("Stop after feature extraction, rig configuration, and matching.")
+        self.run_colmap_button.setToolTip("Run COLMAP on the current exports folder.")
+        self.image_list.setToolTip("Images found in the selected folder.")
+        self.canvas.setToolTip("Preview canvas. Wheel to zoom. Draw with left mouse button.")
+
+    def open_folder(self) -> None:
+        folder_text = QFileDialog.getExistingDirectory(self, "Open image folder")
+        if not folder_text:
+            return
+        self.load_folder(Path(folder_text))
+
+    def load_folder(self, folder: Path) -> None:
+        if self.mask_dirty and not self.confirm_unsaved_mask():
+            return
+        self.state.load_folder(folder)
+        self.image_list.clear()
+        for item in self.state.images:
+            list_item = QListWidgetItem(str(item.relative_dir / item.path.name))
+            list_item.setData(Qt.ItemDataRole.UserRole, item)
+            self.image_list.addItem(list_item)
+        self.status_label.setText(f"{len(self.state.images)} images")
+        self.refresh_colmap_export_info()
+        if self.state.images:
+            self.image_list.setCurrentRow(0)
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802
+        if dropped_path_from_mime(event.mimeData()) is None:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+
+    def dropEvent(self, event) -> None:  # noqa: N802
+        path = dropped_path_from_mime(event.mimeData())
+        if path is None:
+            event.ignore()
+            return
+        if is_video_path(path):
+            self.import_video(path)
+        else:
+            self.load_folder(folder_from_path(path))
+        event.acceptProposedAction()
+
+    def import_video(self, video_path: Path) -> None:
+        if self.mask_dirty and not self.confirm_unsaved_mask():
+            return
+        fps, ok = QInputDialog.getDouble(
+            self,
+            "Extract video frames",
+            "Output FPS",
+            1.0,
+            0.01,
+            120.0,
+            2,
+        )
+        if not ok:
+            return
+
+        def task(worker: TaskWorker) -> Path:
+            worker.progress.emit(f"Extracting frames: {video_path.name}")
+            output_folder = extract_video_frames(video_path, fps)
+            worker.raise_if_cancelled()
+            return output_folder
+
+        self.start_worker(task, self.finish_video_import)
+
+    def finish_video_import(self, result: object) -> None:
+        if isinstance(result, Path):
+            self.load_folder(result)
+
+    def select_image(self, current: QListWidgetItem | None, previous: QListWidgetItem | None = None) -> None:
+        if current is None:
+            return
+        if self._restoring_list_row:
+            return
+        if self.mask_dirty and not self.confirm_unsaved_mask():
+            self._restoring_list_row = True
+            try:
+                if previous is not None:
+                    self.image_list.setCurrentItem(previous)
+            finally:
+                self._restoring_list_row = False
+            return
+        item = current.data(Qt.ItemDataRole.UserRole)
+        self.current_item = item
+        self.current_image = load_rgb(item.path)
+        self.current_mask = load_mask(item.mask_path, self.current_image.shape[:2])
+        self.mask_dirty = False
+        self.undo_stack.clear()
+        self.redo_stack.clear()
+        self.refresh_preview()
+
+    def update_brush(self) -> None:
+        self.canvas.set_brush(self.brush_spin.value(), self.erase_check.isChecked())
+
+    def refresh_model_list(self) -> None:
+        current = self.model_combo.currentData() if hasattr(self, "model_combo") else None
+        self.model_combo.blockSignals(True)
+        self.model_combo.clear()
+        self.model_combo.addItem("Stub / no model", None)
+        model_dir = Path(__file__).resolve().parents[3] / "models"
+        for path in sorted(model_dir.glob("*.onnx")):
+            self.model_combo.addItem(path.name, str(path))
+        if current:
+            index = self.model_combo.findData(current)
+            if index >= 0:
+                self.model_combo.setCurrentIndex(index)
+        self.model_combo.blockSignals(False)
+        self.load_segmenter()
+
+    def refresh_provider_list(self) -> None:
+        current = self.provider_combo.currentData() if hasattr(self, "provider_combo") else None
+        self.provider_combo.blockSignals(True)
+        self.provider_combo.clear()
+        providers = [provider for provider in selectable_onnx_providers() if provider not in self.disabled_provider_names]
+        for provider in providers:
+            self.provider_combo.addItem(provider_label(provider), provider)
+        if current:
+            index = self.provider_combo.findData(current)
+            if index >= 0:
+                self.provider_combo.setCurrentIndex(index)
+        self.provider_combo.blockSignals(False)
+
+    def load_segmenter(self) -> bool:
+        path_text = self.model_combo.currentData()
+        if not path_text:
+            self.clear_segmenter()
+            return False
+        model_path = Path(path_text)
+        if not model_path.exists():
+            self.clear_segmenter()
+            self.status_label.setText(f"Model not found: {model_path}")
+            return False
+        provider_name = self.provider_combo.currentData()
+        try:
+            self.load_segmenter_with_provider(model_path, provider_name)
+        except Exception as exc:
+            self.clear_segmenter()
+            if provider_name is not None:
+                self.disabled_provider_names.add(provider_name)
+                self.refresh_provider_list()
+            self.status_label.setText(f"{provider_label(provider_name)} failed: {short_error(exc)}")
+            return False
+        providers_text = ", ".join(self.segmenter.providers)
+        available_text = ", ".join(available_onnx_providers())
+        self.status_label.setText(f"Loaded model: {model_path.name} | {providers_text} | available: {available_text}")
+        return True
+
+    def clear_segmenter(self) -> None:
+        self.segmenter = None
+        self.direct_generator = DirectEquirectangularGenerator()
+        self._shutdown_cubemap_generator()
+        self.cubemap_generator = CubemapGenerator()
+        self._update_generate_buttons()
+
+    def load_segmenter_with_provider(self, model_path: Path, provider_name: str | None) -> None:
+        providers = resolve_execution_providers(provider_name)
+        self.segmenter = DeimWholebodySegmenter(model_path, providers=providers)
+        self.direct_generator = DirectEquirectangularGenerator(self.segmenter)
+        self._shutdown_cubemap_generator()
+        self.cubemap_generator = PersistentCubemapGenerator(model_path, provider_name)
+        self._update_generate_buttons()
+
+    def _shutdown_cubemap_generator(self) -> None:
+        shutdown = getattr(self.cubemap_generator, "shutdown", None)
+        if callable(shutdown):
+            shutdown()
+
+    def refresh_preview(self) -> None:
+        if self.current_image is None or self.current_mask is None:
+            return
+        image, mask, scale = self._preview_inputs()
+        preview = overlay_mask(image, mask, opacity=self.overlay_opacity_spin.value() / 100.0)
+        self.canvas.set_preview(preview, self.current_mask)
+        self.status_label.setText(f"Mask area: {mask_area(self.current_mask)} px")
+
+    def schedule_preview_refresh(self) -> None:
+        self.preview_timer.start(25)
+
+    def _preview_inputs(self) -> tuple[np.ndarray, np.ndarray, float]:
+        if self.current_image is None or self.current_mask is None:
+            raise RuntimeError("No current image")
+        height, width = self.current_image.shape[:2]
+        target_side = max(640, min(2048, max(self.canvas.width(), self.canvas.height()) * 2))
+        source_side = max(width, height)
+        if source_side <= target_side:
+            return self.current_image, self.current_mask, 1.0
+        scale = target_side / source_side
+        preview_w = max(1, round(width * scale))
+        preview_h = max(1, round(height * scale))
+        image = cv2.resize(self.current_image, (preview_w, preview_h), interpolation=cv2.INTER_AREA)
+        mask = cv2.resize(self.current_mask, (preview_w, preview_h), interpolation=cv2.INTER_NEAREST)
+        return image, mask, scale
+
+    def begin_mask_edit(self) -> None:
+        if self.current_mask is None:
+            return
+        self.undo_stack.append(self.current_mask.copy())
+        self.redo_stack.clear()
+
+    def commit_canvas_stroke(self, stroke_mask: np.ndarray, erase: bool) -> None:
+        if self.current_mask is None:
+            return
+        if erase:
+            self.current_mask = np.where(stroke_mask > 0, 0, self.current_mask).astype(np.uint8)
+        else:
+            self.current_mask = np.maximum(self.current_mask, stroke_mask).astype(np.uint8)
+        self.mask_dirty = True
+        self.refresh_preview()
+
+    def undo(self) -> None:
+        if self.current_mask is None or not self.undo_stack:
+            return
+        self.redo_stack.append(self.current_mask.copy())
+        self.current_mask = self.undo_stack.pop()
+        self.mask_dirty = True
+        self.refresh_preview()
+
+    def redo(self) -> None:
+        if self.current_mask is None or not self.redo_stack:
+            return
+        self.undo_stack.append(self.current_mask.copy())
+        self.current_mask = self.redo_stack.pop()
+        self.mask_dirty = True
+        self.refresh_preview()
+
+    def _options(self) -> MaskOptions:
+        return MaskOptions(
+            strategy=self.strategy_combo.currentText(),
+            score_threshold=self.score_spin.value() / 100.0,
+            mask_threshold=self.mask_threshold_spin.value() / 100.0,
+        )
+
+    def generate_selected(self) -> None:
+        self._generate_items(self._selected_image_items())
+
+    def generate_all(self) -> None:
+        self._generate_items(list(self.state.images))
+
+    def _generate_items(self, items: list[ImageItem]) -> None:
+        if not items:
+            return
+        options = self._options()
+
+        def task(worker: TaskWorker) -> None:
+            for idx, item in enumerate(items, start=1):
+                worker.raise_if_cancelled()
+                label = f"Generating {idx}/{len(items)}: {item.path.name}"
+                worker.progress.emit(label)
+                image = load_rgb(item.path)
+                mask = self._generate_for_item(item, image, options, worker, label)
+                save_mask(item.mask_path, mask)
+            return None
+
+        self.start_worker(task, self.finish_generate_all)
+
+    def _selected_image_items(self) -> list[ImageItem]:
+        selected = sorted(self.image_list.selectedItems(), key=self.image_list.row)
+        return [list_item.data(Qt.ItemDataRole.UserRole) for list_item in selected]
+
+    def _generate_for_item(
+        self,
+        item: ImageItem,
+        image: np.ndarray,
+        options: MaskOptions,
+        worker: TaskWorker | None = None,
+        label: str = "",
+    ) -> np.ndarray:
+        def cubemap_progress(current: int, total: int, face: str) -> None:
+            if worker is not None:
+                prefix = label or item.path.name
+                worker.progress.emit(f"{prefix} | cubemap {current}/{total}: {face}")
+
+        cancel_event = worker.cancel_event if worker is not None else None
+
+        strategy = options.strategy
+        if strategy == "direct":
+            result = self.direct_generator.generate(image, options)
+            save_mask(item.direct_mask_path, result.mask)
+            return result.mask
+        if strategy == "cubemap":
+            result = self.cubemap_generator.generate(
+                image, options, progress=cubemap_progress, cancel_event=cancel_event
+            )
+            save_mask(item.cubemap_mask_path, result.mask)
+            return result.mask
+        direct = self.direct_generator.generate(image, options)
+        if worker is not None:
+            worker.raise_if_cancelled()
+        cubemap = self.cubemap_generator.generate(
+            image, options, progress=cubemap_progress, cancel_event=cancel_event
+        )
+        save_mask(item.direct_mask_path, direct.mask)
+        save_mask(item.cubemap_mask_path, cubemap.mask)
+        return merge_compare_masks(direct.mask, cubemap.mask)
+
+    def save_current_mask(self) -> None:
+        if self.current_item is None or self.current_mask is None:
+            return
+        save_mask(self.current_item.mask_path, self.current_mask)
+        self.mask_dirty = False
+        self.status_label.setText(f"Saved {self.current_item.mask_path.name}")
+
+    def export_selected(self) -> None:
+        self._export_items(self._selected_image_items())
+
+    def export_all(self) -> None:
+        self._export_items(list(self.state.images))
+
+    def _export_items(self, items: list[ImageItem]) -> None:
+        if not items:
+            return
+        settings = self._export_settings()
+        self.start_worker(lambda worker: self._export_worker(worker, items, settings), lambda result: None)
+
+    def _export_settings(self) -> ColmapExportSettings:
+        return ColmapExportSettings(tile_size=self.tile_size_spin.value(), fov_deg=float(self.fov_spin.value()))
+
+    def _export_worker(self, worker: TaskWorker, items: list[ImageItem], settings: ColmapExportSettings) -> None:
+        for idx, item in enumerate(items, start=1):
+            worker.raise_if_cancelled()
+            worker.progress.emit(f"Exporting {idx}/{len(items)}: {item.path.name}")
+            self._export_item(item, settings)
+        if self.state.export_dir is not None:
+            write_colmap_metadata(self.state.export_dir, settings)
+            self.refresh_colmap_export_info()
+        return None
+
+    def finish_generate_all(self, result: object) -> None:
+        if self.current_item:
+            self.select_image(self.image_list.currentItem())
+
+    def start_worker(self, task, on_finished) -> None:
+        if self.worker_thread is not None:
+            self.status_label.setText("Task already running")
+            return
+        self.set_busy(True)
+        thread = QThread(self)
+        worker = TaskWorker(task)
+        worker.moveToThread(thread)
+        worker.progress.connect(self.status_label.setText)
+        worker.failed.connect(self.on_worker_failed)
+        worker.finished.connect(on_finished)
+        worker.finished.connect(lambda result: self.on_worker_done())
+        worker.cancelled.connect(self.on_worker_cancelled)
+        thread.started.connect(worker.run)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self.worker_thread = thread
+        self.worker = worker
+        thread.start()
+
+    def on_worker_failed(self, message: str) -> None:
+        self.status_label.setText(message)
+        self.on_worker_done()
+
+    def on_worker_done(self) -> None:
+        thread = self.worker_thread
+        self.worker = None
+        self.worker_thread = None
+        self.set_busy(False)
+        if thread is not None:
+            thread.quit()
+
+    def cancel_current_task(self) -> None:
+        if self.colmap_process is not None:
+            self._colmap_cancelled = True
+            self.colmap_process.kill()
+            self.cancel_button.setEnabled(False)
+            self.status_label.setText("Cancelling COLMAP...")
+            return
+        if self.worker is None:
+            return
+        self.worker.cancel()
+        self.cancel_button.setEnabled(False)
+        self.status_label.setText("Cancelling...")
+
+    def on_worker_cancelled(self) -> None:
+        self.on_worker_done()
+        self.status_label.setText("Task cancelled. Finished images were kept.")
+        if self.current_item:
+            self.select_image(self.image_list.currentItem())
+
+    def set_busy(self, busy: bool) -> None:
+        self._busy = busy
+        for widget in (
+            self.open_button,
+            self.model_combo,
+            self.provider_combo,
+            self.model_button,
+            self.export_selected_button,
+            self.export_all_button,
+            self.run_colmap_button,
+            self.colmap_browse_button,
+            self.colmap_path_edit,
+            self.colmap_matcher_combo,
+            self.colmap_overwrite_check,
+            self.colmap_skip_mapping_check,
+        ):
+            widget.setEnabled(not busy)
+        self.cancel_button.setEnabled(busy)
+        self._update_generate_buttons()
+
+    def _update_generate_buttons(self) -> None:
+        enabled = not self._busy and self.segmenter is not None
+        if self.segmenter is None:
+            tooltip_selected = "Load an ONNX model to enable mask generation."
+            tooltip_all = tooltip_selected
+        else:
+            tooltip_selected = "Generate and save masks for the selected images."
+            tooltip_all = "Generate and save masks for all images in the folder."
+        self.generate_selected_button.setEnabled(enabled)
+        self.generate_selected_button.setToolTip(tooltip_selected)
+        self.generate_all_button.setEnabled(enabled)
+        self.generate_all_button.setToolTip(tooltip_all)
+
+    def _export_item(self, item: ImageItem, settings: ColmapExportSettings) -> None:
+        if self.state.export_dir is None:
+            return
+        export_item_for_colmap(item, self.state.export_dir, settings)
+
+    def browse_colmap_executable(self) -> None:
+        path_text, _ = QFileDialog.getOpenFileName(self, "Select COLMAP executable")
+        if path_text:
+            self.colmap_path_edit.setText(path_text)
+
+    def refresh_colmap_export_info(self) -> None:
+        if self.state.export_dir is None:
+            self.colmap_image_path_label.setText("-")
+            self.colmap_image_count_label.setText("0")
+            self.colmap_mask_count_label.setText("0")
+            return
+        images_dir = self.state.export_dir / "images"
+        masks_dir = self.state.export_dir / "masks"
+        image_count, mask_count = colmap_image_mask_counts(images_dir, masks_dir)
+        self.colmap_image_path_label.setText(str(images_dir))
+        self.colmap_image_count_label.setText(str(image_count))
+        self.colmap_mask_count_label.setText(str(mask_count))
+
+    def run_colmap_gui(self) -> None:
+        if self.colmap_process is not None or self.worker_thread is not None:
+            self.status_label.setText("Task already running")
+            return
+        if self.state.export_dir is None:
+            self.status_label.setText("No export folder")
+            return
+        export_dir = self.state.export_dir
+        self.refresh_colmap_export_info()
+        try:
+            validate_export_dir(export_dir)
+            self.prepare_colmap_output(export_dir)
+        except (Exception, SystemExit) as exc:
+            self.status_label.setText(short_error(exc))
+            QMessageBox.warning(self, "COLMAP", str(exc))
+            return
+        settings = ColmapRunSettings(
+            colmap=self.colmap_path_edit.text().strip() or "colmap",
+            tile_size=self.tile_size_spin.value(),
+            fov_deg=float(self.fov_spin.value()),
+            matcher=self.colmap_matcher_combo.currentText(),
+            skip_mapping=self.colmap_skip_mapping_check.isChecked(),
+        )
+        self.colmap_steps = build_colmap_steps(export_dir, settings)
+        self.colmap_step_index = 0
+        self._colmap_cancelled = False
+        self.colmap_log.clear()
+        self.colmap_progress.setRange(0, len(self.colmap_steps))
+        self.colmap_progress.setValue(0)
+        self.set_busy(True)
+        self.start_next_colmap_step()
+
+    def prepare_colmap_output(self, export_dir: Path) -> None:
+        database_path = export_dir / "database.db"
+        sparse_dir = export_dir / "sparse"
+        if self.colmap_overwrite_check.isChecked():
+            if database_path.exists():
+                database_path.unlink()
+            if sparse_dir.exists():
+                shutil.rmtree(sparse_dir)
+        sparse_dir.mkdir(parents=True, exist_ok=True)
+
+    def start_next_colmap_step(self) -> None:
+        if self.colmap_step_index >= len(self.colmap_steps):
+            self.colmap_process = None
+            self.set_busy(False)
+            self.colmap_stage_label.setText("Done")
+            self.status_label.setText("COLMAP finished")
+            self.append_colmap_log("COLMAP finished")
+            return
+        step = self.colmap_steps[self.colmap_step_index]
+        self.colmap_stage_label.setText(f"{self.colmap_step_index + 1}/{len(self.colmap_steps)} {step.name}")
+        self.status_label.setText(step.name)
+        self.append_colmap_log(f"> {' '.join(step.command)}")
+        process = QProcess(self)
+        process.setWorkingDirectory(str(self.state.export_dir))
+        process.readyReadStandardOutput.connect(self.read_colmap_stdout)
+        process.readyReadStandardError.connect(self.read_colmap_stderr)
+        process.finished.connect(self.on_colmap_finished)
+        process.errorOccurred.connect(self.on_colmap_error)
+        self.colmap_process = process
+        process.start(step.command[0], step.command[1:])
+
+    def read_colmap_stdout(self) -> None:
+        if self.colmap_process is None:
+            return
+        self.append_colmap_log(bytes(self.colmap_process.readAllStandardOutput()).decode(errors="replace").rstrip())
+
+    def read_colmap_stderr(self) -> None:
+        if self.colmap_process is None:
+            return
+        self.append_colmap_log(bytes(self.colmap_process.readAllStandardError()).decode(errors="replace").rstrip())
+
+    def append_colmap_log(self, text: str) -> None:
+        if text:
+            self.colmap_log.appendPlainText(text)
+
+    def on_colmap_finished(self, exit_code: int, exit_status: QProcess.ExitStatus) -> None:
+        if self.colmap_process is None:
+            return
+        if self._colmap_cancelled:
+            self.colmap_process = None
+            self.set_busy(False)
+            self.colmap_stage_label.setText("Cancelled")
+            self.status_label.setText("COLMAP cancelled")
+            return
+        if exit_status != QProcess.ExitStatus.NormalExit or exit_code != 0:
+            self.colmap_process = None
+            self.set_busy(False)
+            self.colmap_stage_label.setText("Failed")
+            self.status_label.setText(f"COLMAP failed: exit {exit_code}")
+            return
+        self.colmap_step_index += 1
+        self.colmap_progress.setValue(self.colmap_step_index)
+        self.colmap_process = None
+        self.start_next_colmap_step()
+
+    def on_colmap_error(self, error: QProcess.ProcessError) -> None:
+        self.append_colmap_log(f"COLMAP process error: {error.name}")
+        if error == QProcess.ProcessError.FailedToStart:
+            self.colmap_process = None
+            self.set_busy(False)
+            self.colmap_stage_label.setText("Failed")
+            self.status_label.setText("COLMAP failed to start")
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        if self.worker_thread is not None or self.colmap_process is not None:
+            self.status_label.setText("Task running")
+            event.ignore()
+            return
+        if not self.confirm_unsaved_mask():
+            event.ignore()
+            return
+        self._shutdown_cubemap_generator()
+        event.accept()
+
+    def confirm_unsaved_mask(self) -> bool:
+        if not self.mask_dirty or self.current_item is None or self.current_mask is None:
+            return True
+        reply = QMessageBox.question(
+            self,
+            "Save mask",
+            "Save current mask changes?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+        )
+        if reply == QMessageBox.StandardButton.Cancel:
+            return False
+        if reply == QMessageBox.StandardButton.Yes:
+            self.save_current_mask()
+        else:
+            self.mask_dirty = False
+        return True
+
+
+def short_error(exc: Exception, limit: int = 180) -> str:
+    message = str(exc).replace("\n", " ").strip()
+    return message if len(message) <= limit else f"{message[:limit]}..."
+
+
+def folder_from_mime(mime_data) -> Path | None:
+    path = dropped_path_from_mime(mime_data)
+    if path is None or is_video_path(path):
+        return None
+    return folder_from_path(path)
+
+
+def folder_from_path(path: Path) -> Path:
+    if path.is_dir():
+        return path
+    return path.parent
+
+
+def colmap_image_mask_counts(images_dir: Path, masks_dir: Path) -> tuple[int, int]:
+    if not images_dir.exists():
+        return 0, 0
+    image_paths = sorted(
+        path for path in images_dir.rglob("*") if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
+    )
+    mask_count = 0
+    for image_path in image_paths:
+        mask_path = masks_dir / image_path.relative_to(images_dir).with_name(f"{image_path.name}.png")
+        if mask_path.exists():
+            mask_count += 1
+    return len(image_paths), mask_count
+
+
+def dropped_path_from_mime(mime_data) -> Path | None:
+    if not mime_data.hasUrls():
+        return None
+    for url in mime_data.urls():
+        if not url.isLocalFile():
+            continue
+        path = Path(url.toLocalFile())
+        if path.is_dir():
+            return path
+        if path.is_file() and (path.suffix.lower() in IMAGE_EXTENSIONS or is_video_path(path)):
+            return path
+    return None

@@ -1,0 +1,41 @@
+[project]
+name = "colmap-mask"
+version = "0.1.0"
+description = "Generate editable person masks and COLMAP perspective tiles from equirectangular panorama images."
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26",
+    "opencv-python>=4.9",
+    "pillow>=10.0",
+    "pyside6>=6.6",
+]
+
+[project.optional-dependencies]
+inference = [
+    "onnxruntime>=1.17",
+]
+gpu-cuda = [
+    "onnxruntime-gpu[cuda,cudnn]>=1.21",
+]
+gpu-directml = [
+    "onnxruntime-directml>=1.17",
+]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+colmap-mask = "colmap_mask.app:main"
+colmap-mask-download-model = "colmap_mask.tools.download_model:main"
+colmap-mask-run-colmap = "colmap_mask.tools.run_colmap:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
