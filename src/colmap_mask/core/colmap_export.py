@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,8 +16,8 @@ from colmap_mask.projection.perspective import (
     rotation_matrix_to_quaternion,
 )
 
-PITCHES = (0, 60, -60)
-YAWS = (0, 60, 120, 180, 240, 300)
+ICOSAHEDRON_X_ROTATION_DEG = 25.0
+ICOSAHEDRON_Z_ROTATION_DEG = 18.0
 
 
 @dataclass(frozen=True)
@@ -28,22 +29,92 @@ class ColmapExportSettings:
 @dataclass(frozen=True)
 class VirtualCamera:
     camera_id: int
-    yaw_deg: int
-    pitch_deg: int
+    yaw_deg: float
+    pitch_deg: float
+    direction: tuple[float, float, float]
 
     @property
     def name(self) -> str:
-        return f"cam{self.camera_id:02d}_y{self.yaw_deg:03d}_p{self.pitch_deg:+03d}"
+        return f"cam{self.camera_id:02d}_y{round_angle_for_name(self.yaw_deg):03d}_p{round_angle_for_name(self.pitch_deg):+03d}"
 
 
 def virtual_cameras() -> list[VirtualCamera]:
-    cameras: list[VirtualCamera] = []
-    camera_id = 1
-    for pitch in PITCHES:
-        for yaw in YAWS:
-            cameras.append(VirtualCamera(camera_id, yaw, pitch))
-            camera_id += 1
-    return cameras
+    directions = rotated_icosahedron_directions()
+    angles = [direction_to_yaw_pitch(direction) for direction in directions]
+    order = sorted(range(len(directions)), key=lambda index: (-angles[index][1], angles[index][0]))
+    return [
+        VirtualCamera(
+            camera_id=camera_id,
+            yaw_deg=angles[index][0],
+            pitch_deg=angles[index][1],
+            direction=tuple(float(value) for value in directions[index]),
+        )
+        for camera_id, index in enumerate(order, start=1)
+    ]
+
+
+def rotated_icosahedron_directions() -> list[np.ndarray]:
+    phi = (1.0 + math.sqrt(5.0)) * 0.5
+    vertices = [
+        (-1.0, phi, 0.0),
+        (1.0, phi, 0.0),
+        (-1.0, -phi, 0.0),
+        (1.0, -phi, 0.0),
+        (0.0, -1.0, phi),
+        (0.0, 1.0, phi),
+        (0.0, -1.0, -phi),
+        (0.0, 1.0, -phi),
+        (phi, 0.0, -1.0),
+        (phi, 0.0, 1.0),
+        (-phi, 0.0, -1.0),
+        (-phi, 0.0, 1.0),
+    ]
+    rotation = rotation_z(ICOSAHEDRON_Z_ROTATION_DEG) @ rotation_x(ICOSAHEDRON_X_ROTATION_DEG)
+    directions: list[np.ndarray] = []
+    for vertex in vertices:
+        direction = rotation @ np.asarray(vertex, dtype=np.float64)
+        direction /= np.linalg.norm(direction)
+        directions.append(direction)
+    return directions
+
+
+def rotation_x(angle_deg: float) -> np.ndarray:
+    angle = math.radians(angle_deg)
+    cos_a = math.cos(angle)
+    sin_a = math.sin(angle)
+    return np.asarray(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, cos_a, -sin_a],
+            [0.0, sin_a, cos_a],
+        ],
+        dtype=np.float64,
+    )
+
+
+def rotation_z(angle_deg: float) -> np.ndarray:
+    angle = math.radians(angle_deg)
+    cos_a = math.cos(angle)
+    sin_a = math.sin(angle)
+    return np.asarray(
+        [
+            [cos_a, -sin_a, 0.0],
+            [sin_a, cos_a, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+
+
+def direction_to_yaw_pitch(direction: np.ndarray) -> tuple[float, float]:
+    x, y, z = (float(value) for value in direction)
+    yaw = math.degrees(math.atan2(x, z)) % 360.0
+    pitch = math.degrees(math.asin(max(-1.0, min(1.0, y))))
+    return yaw, pitch
+
+
+def round_angle_for_name(angle_deg: float) -> int:
+    return int(round(angle_deg)) % 360 if angle_deg >= 0.0 else int(round(angle_deg))
 
 
 def export_item_for_colmap(

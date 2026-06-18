@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import sqlite3
+import struct
 from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
@@ -7,6 +10,9 @@ from PySide6.QtWidgets import QApplication
 from colmap_mask.ui.main_window import (
     MainWindow,
     colmap_image_mask_counts,
+    colmap_pipeline_status,
+    colmap_registered_image_count,
+    colmap_run_start_text,
     default_colmap_executable,
     dropped_path_from_mime,
     folder_from_mime,
@@ -58,6 +64,73 @@ def test_colmap_image_mask_counts_matching_masks(tmp_path: Path) -> None:
     assert colmap_image_mask_counts(images_dir, masks_dir) == (2, 1)
 
 
+def test_colmap_registered_image_count_uses_latest_snapshot(tmp_path: Path) -> None:
+    sparse_model = tmp_path / "exports" / "sparse" / "0"
+    snapshot_model = tmp_path / "exports" / "snapshots" / "50"
+    sparse_model.mkdir(parents=True)
+    snapshot_model.mkdir(parents=True)
+    (sparse_model / "images.bin").write_bytes(struct.pack("<Q", 12))
+    (snapshot_model / "images.bin").write_bytes(struct.pack("<Q", 50))
+    os.utime(sparse_model / "images.bin", (100, 100))
+    os.utime(snapshot_model / "images.bin", (200, 200))
+
+    assert colmap_registered_image_count(tmp_path / "exports") == 50
+
+
+def test_colmap_pipeline_status_detects_resume_step(tmp_path: Path) -> None:
+    export_dir = tmp_path / "exports"
+    images_dir = export_dir / "images" / "cam01"
+    masks_dir = export_dir / "masks" / "cam01"
+    images_dir.mkdir(parents=True)
+    masks_dir.mkdir(parents=True)
+    (images_dir / "frame_000001.jpg").write_bytes(b"")
+    (masks_dir / "frame_000001.jpg.png").write_bytes(b"")
+    (export_dir / "rig_config.json").write_text("{}", encoding="utf-8")
+    with sqlite3.connect(export_dir / "database.db") as connection:
+        connection.execute("CREATE TABLE images(image_id INTEGER)")
+        connection.execute("INSERT INTO images VALUES (1)")
+        connection.execute("CREATE TABLE frames(frame_id INTEGER)")
+        connection.execute("INSERT INTO frames VALUES (1)")
+
+    status = colmap_pipeline_status(export_dir)
+
+    assert status.export_ready
+    assert status.feature_done
+    assert status.rig_done
+    assert not status.matching_done
+    assert status.next_step == "Feature matching"
+    assert colmap_run_start_text(status, overwrite=False, skip_completed=True) == "Feature matching"
+    assert colmap_run_start_text(status, overwrite=True, skip_completed=False) == "Feature extraction (overwrite)"
+
+
+def test_colmap_pipeline_status_detects_rig_ba_step(tmp_path: Path) -> None:
+    export_dir = tmp_path / "exports"
+    images_dir = export_dir / "images" / "cam01"
+    masks_dir = export_dir / "masks" / "cam01"
+    sparse_model = export_dir / "sparse" / "0"
+    images_dir.mkdir(parents=True)
+    masks_dir.mkdir(parents=True)
+    sparse_model.mkdir(parents=True)
+    (images_dir / "frame_000001.jpg").write_bytes(b"")
+    (masks_dir / "frame_000001.jpg.png").write_bytes(b"")
+    (export_dir / "rig_config.json").write_text("{}", encoding="utf-8")
+    for name in ("cameras.bin", "images.bin", "points3D.bin"):
+        (sparse_model / name).write_bytes(struct.pack("<Q", 1) if name == "images.bin" else b"")
+    with sqlite3.connect(export_dir / "database.db") as connection:
+        connection.execute("CREATE TABLE images(image_id INTEGER)")
+        connection.execute("INSERT INTO images VALUES (1)")
+        connection.execute("CREATE TABLE frames(frame_id INTEGER)")
+        connection.execute("INSERT INTO frames VALUES (1)")
+        connection.execute("CREATE TABLE matches(pair_id INTEGER)")
+        connection.execute("INSERT INTO matches VALUES (1)")
+
+    status = colmap_pipeline_status(export_dir, rig_ba_enabled=True)
+
+    assert status.sparse_done
+    assert not status.rig_ba_done
+    assert status.next_step == "Rig bundle adjustment"
+
+
 def test_colmap_overwrite_is_checked_by_default() -> None:
     app = QApplication.instance() or QApplication([])
     window = MainWindow()
@@ -65,9 +138,14 @@ def test_colmap_overwrite_is_checked_by_default() -> None:
         assert window.colmap_overwrite_check.isChecked()
         assert window.tile_size_spin.value() == 3072
         assert window.colmap_matcher_combo.currentText() == "pairs"
+        assert window.colmap_sparse_mapper_combo.currentText() == "mapper"
         assert window.colmap_use_gpu_check.isChecked()
         assert window.colmap_gpu_index_edit.text() == "-1"
+        assert window.colmap_snapshot_check.isChecked()
+        assert window.colmap_snapshot_freq_spin.value() == 50
         assert not window.colmap_skip_completed_check.isChecked()
+        assert not window.colmap_rig_ba_check.isChecked()
+        assert not window.colmap_dense_check.isChecked()
         assert window.colmap_path_edit.text() == default_colmap_executable()
     finally:
         window.close()

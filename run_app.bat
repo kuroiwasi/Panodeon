@@ -11,4 +11,5 @@ if not exist ".venv\Scripts\python.exe" (
 
 set "PATH=%CD%\.venv\Lib\site-packages\nvidia\cudnn\bin;%CD%\.venv\Lib\site-packages\nvidia\cublas\bin;%PATH%"
 
-".venv\Scripts\colmap-mask.exe"
+start "" "%CD%\.venv\Scripts\pythonw.exe" -m colmap_mask.app
+exit /b 0

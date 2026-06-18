@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import shutil
+import struct
 from pathlib import Path
 
 import cv2
@@ -47,7 +49,12 @@ from colmap_mask.tools.run_colmap import (
     ColmapRunSettings,
     ColmapStep,
     build_colmap_steps,
+    database_has_rows,
     detect_colmap_gpu_options,
+    detect_colmap_mapper_options,
+    dense_model_exists,
+    should_overwrite_outputs,
+    sparse_model_exists,
     validate_export_dir,
 )
 from colmap_mask.ui.image_canvas import ImageCanvas
@@ -277,6 +284,9 @@ class MainWindow(QMainWindow):
         self.preview_timer = QTimer(self)
         self.preview_timer.setSingleShot(True)
         self.preview_timer.timeout.connect(self.refresh_preview)
+        self.colmap_status_timer = QTimer(self)
+        self.colmap_status_timer.setInterval(5000)
+        self.colmap_status_timer.timeout.connect(self.refresh_colmap_export_info)
         self._build_ui()
         self.refresh_model_list()
 
@@ -420,17 +430,31 @@ class MainWindow(QMainWindow):
 
         self.colmap_matcher_combo = QComboBox()
         self.colmap_matcher_combo.addItems(["pairs", "exhaustive", "sequential", "vocab_tree"])
-        self.colmap_overwrite_check = QCheckBox("Overwrite database/sparse")
+        self.colmap_sparse_mapper_combo = QComboBox()
+        self.colmap_sparse_mapper_combo.addItems(["mapper", "hierarchical_mapper"])
+        self.colmap_overwrite_check = QCheckBox("Overwrite outputs")
         self.colmap_overwrite_check.setChecked(True)
         self.colmap_skip_completed_check = QCheckBox("Skip completed steps")
         self.colmap_skip_mapping_check = QCheckBox("Skip mapping")
+        self.colmap_rig_ba_check = QCheckBox("Rig bundle adjustment")
+        self.colmap_dense_check = QCheckBox("Dense reconstruction")
         self.colmap_use_gpu_check = QCheckBox("Use GPU if available")
         self.colmap_use_gpu_check.setChecked(True)
         self.colmap_gpu_index_edit = QLineEdit("-1")
+        self.colmap_snapshot_check = QCheckBox("Mapper snapshots")
+        self.colmap_snapshot_check.setChecked(True)
+        self.colmap_snapshot_freq_spin = QSpinBox()
+        self.colmap_snapshot_freq_spin.setRange(1, 10000)
+        self.colmap_snapshot_freq_spin.setValue(50)
         self.colmap_image_path_label = QLabel("-")
         self.colmap_image_path_label.setWordWrap(True)
         self.colmap_image_count_label = QLabel("0")
         self.colmap_mask_count_label = QLabel("0")
+        self.colmap_registered_count_label = QLabel("0")
+        self.colmap_resume_label = QLabel("-")
+        self.colmap_resume_label.setWordWrap(True)
+        self.colmap_run_start_label = QLabel("-")
+        self.colmap_run_start_label.setWordWrap(True)
         self.colmap_progress = QProgressBar()
         self.colmap_progress.setRange(0, 1)
         self.colmap_progress.setValue(0)
@@ -444,19 +468,60 @@ class MainWindow(QMainWindow):
 
         layout_colmap.addRow("Executable", colmap_path_layout)
         layout_colmap.addRow("Matcher", self.colmap_matcher_combo)
+        layout_colmap.addRow("Sparse Mapper", self.colmap_sparse_mapper_combo)
         layout_colmap.addRow("", self.colmap_overwrite_check)
         layout_colmap.addRow("", self.colmap_skip_completed_check)
         layout_colmap.addRow("", self.colmap_skip_mapping_check)
+        layout_colmap.addRow("", self.colmap_rig_ba_check)
+        layout_colmap.addRow("", self.colmap_dense_check)
         layout_colmap.addRow("", self.colmap_use_gpu_check)
         layout_colmap.addRow("GPU Index", self.colmap_gpu_index_edit)
+        layout_colmap.addRow("", self.colmap_snapshot_check)
+        layout_colmap.addRow("Snapshot Freq", self.colmap_snapshot_freq_spin)
         layout_colmap.addRow("Image Path", self.colmap_image_path_label)
         layout_colmap.addRow("Images", self.colmap_image_count_label)
         layout_colmap.addRow("Masks", self.colmap_mask_count_label)
+        layout_colmap.addRow("Registered", self.colmap_registered_count_label)
         layout_colmap.addRow("Progress", self.colmap_progress)
         layout_colmap.addRow("Stage", self.colmap_stage_label)
         layout_colmap.addRow("Log", self.colmap_log)
         layout_colmap.addRow("", self.run_colmap_button)
         colmap_layout.addWidget(group_colmap)
+
+        group_colmap_status = QGroupBox("COLMAP Status")
+        layout_colmap_status = QFormLayout(group_colmap_status)
+        layout_colmap_status.setContentsMargins(10, 15, 10, 10)
+        layout_colmap_status.setSpacing(8)
+        self.colmap_export_status_label = QLabel("-")
+        self.colmap_feature_status_label = QLabel("-")
+        self.colmap_rig_status_label = QLabel("-")
+        self.colmap_match_status_label = QLabel("-")
+        self.colmap_sparse_status_label = QLabel("-")
+        self.colmap_rig_ba_status_label = QLabel("-")
+        self.colmap_dense_status_label = QLabel("-")
+        self.colmap_snapshot_status_label = QLabel("-")
+        for label in (
+            self.colmap_export_status_label,
+            self.colmap_feature_status_label,
+            self.colmap_rig_status_label,
+            self.colmap_match_status_label,
+            self.colmap_sparse_status_label,
+            self.colmap_rig_ba_status_label,
+            self.colmap_dense_status_label,
+            self.colmap_snapshot_status_label,
+        ):
+            label.setWordWrap(True)
+        layout_colmap_status.addRow("Resume From", self.colmap_resume_label)
+        layout_colmap_status.addRow("Run Starts", self.colmap_run_start_label)
+        layout_colmap_status.addRow("Export", self.colmap_export_status_label)
+        layout_colmap_status.addRow("Features", self.colmap_feature_status_label)
+        layout_colmap_status.addRow("Rig", self.colmap_rig_status_label)
+        layout_colmap_status.addRow("Matches", self.colmap_match_status_label)
+        layout_colmap_status.addRow("Sparse", self.colmap_sparse_status_label)
+        layout_colmap_status.addRow("Rig BA", self.colmap_rig_ba_status_label)
+        layout_colmap_status.addRow("Dense", self.colmap_dense_status_label)
+        layout_colmap_status.addRow("Snapshots", self.colmap_snapshot_status_label)
+        colmap_layout.addWidget(group_colmap_status)
         colmap_layout.addStretch()
 
         # Actions area (horizontal layouts)
@@ -522,6 +587,10 @@ class MainWindow(QMainWindow):
         self.export_all_button.clicked.connect(self.export_all)
         self.colmap_browse_button.clicked.connect(self.browse_colmap_executable)
         self.run_colmap_button.clicked.connect(self.run_colmap_gui)
+        self.colmap_overwrite_check.stateChanged.connect(lambda value: self.refresh_colmap_export_info())
+        self.colmap_skip_completed_check.stateChanged.connect(lambda value: self.refresh_colmap_export_info())
+        self.colmap_rig_ba_check.stateChanged.connect(lambda value: self.refresh_colmap_export_info())
+        self.colmap_dense_check.stateChanged.connect(lambda value: self.refresh_colmap_export_info())
         self.undo_button.clicked.connect(self.undo)
         self.redo_button.clicked.connect(self.redo)
         self.cancel_button.clicked.connect(self.cancel_current_task)
@@ -551,11 +620,16 @@ class MainWindow(QMainWindow):
         self.colmap_path_edit.setToolTip("COLMAP executable name or full path.")
         self.colmap_browse_button.setToolTip("Select colmap.exe.")
         self.colmap_matcher_combo.setToolTip("COLMAP matcher command.")
-        self.colmap_overwrite_check.setToolTip("Delete existing database.db and sparse before running COLMAP.")
-        self.colmap_skip_completed_check.setToolTip("Skip steps with existing database/sparse outputs. Disable overwrite to reuse them.")
+        self.colmap_sparse_mapper_combo.setToolTip("Sparse reconstruction command. hierarchical_mapper is experimental for large datasets.")
+        self.colmap_overwrite_check.setToolTip("Delete existing database.db, sparse, and selected dense outputs before running COLMAP.")
+        self.colmap_skip_completed_check.setToolTip("Skip steps with existing COLMAP outputs. This takes priority over overwrite.")
         self.colmap_skip_mapping_check.setToolTip("Stop after feature extraction, rig configuration, and matching.")
+        self.colmap_rig_ba_check.setToolTip("Run bundle_adjuster after sparse mapping and keep output under exports/sparse_rig_ba.")
+        self.colmap_dense_check.setToolTip("Run image undistortion, patch-match stereo, and stereo fusion after sparse mapping.")
         self.colmap_use_gpu_check.setToolTip("Use COLMAP GPU SIFT extraction and matching when the binary supports it.")
         self.colmap_gpu_index_edit.setToolTip("COLMAP GPU index. -1 lets COLMAP choose/use all available GPUs.")
+        self.colmap_snapshot_check.setToolTip("Save mapper snapshot models under exports/snapshots during sparse mapping.")
+        self.colmap_snapshot_freq_spin.setToolTip("Save a mapper snapshot every N newly registered images.")
         self.run_colmap_button.setToolTip("Run COLMAP on the current exports folder.")
         self.image_list.setToolTip("Images found in the selected folder.")
         self.canvas.setToolTip("Preview canvas. Wheel to zoom. Draw with left mouse button.")
@@ -611,10 +685,20 @@ class MainWindow(QMainWindow):
         )
         if not ok:
             return
+        quality_select = (
+            QMessageBox.question(
+                self,
+                "Frame selection",
+                "Select sharpest frame within each output interval?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            == QMessageBox.StandardButton.Yes
+        )
 
         def task(worker: TaskWorker) -> Path:
             worker.progress.emit(f"Extracting frames: {video_path.name}")
-            output_folder = extract_video_frames(video_path, fps)
+            output_folder = extract_video_frames(video_path, fps, quality_select=quality_select)
             worker.raise_if_cancelled()
             return output_folder
 
@@ -950,11 +1034,16 @@ class MainWindow(QMainWindow):
             self.colmap_browse_button,
             self.colmap_path_edit,
             self.colmap_matcher_combo,
+            self.colmap_sparse_mapper_combo,
             self.colmap_overwrite_check,
             self.colmap_skip_completed_check,
             self.colmap_skip_mapping_check,
+            self.colmap_rig_ba_check,
+            self.colmap_dense_check,
             self.colmap_use_gpu_check,
             self.colmap_gpu_index_edit,
+            self.colmap_snapshot_check,
+            self.colmap_snapshot_freq_spin,
         ):
             widget.setEnabled(not busy)
         self.cancel_button.setEnabled(busy)
@@ -988,13 +1077,55 @@ class MainWindow(QMainWindow):
             self.colmap_image_path_label.setText("-")
             self.colmap_image_count_label.setText("0")
             self.colmap_mask_count_label.setText("0")
+            self.colmap_registered_count_label.setText("0")
+            self.update_colmap_status_panel(None)
             return
         images_dir = self.state.export_dir / "images"
         masks_dir = self.state.export_dir / "masks"
         image_count, mask_count = colmap_image_mask_counts(images_dir, masks_dir)
+        registered_count = colmap_registered_image_count(self.state.export_dir)
         self.colmap_image_path_label.setText(str(images_dir))
         self.colmap_image_count_label.setText(str(image_count))
         self.colmap_mask_count_label.setText(str(mask_count))
+        self.colmap_registered_count_label.setText(f"{registered_count} / {image_count}")
+        self.update_colmap_status_panel(
+            colmap_pipeline_status(
+                self.state.export_dir,
+                rig_ba_enabled=self.colmap_rig_ba_check.isChecked(),
+                dense_enabled=self.colmap_dense_check.isChecked(),
+            )
+        )
+
+    def update_colmap_status_panel(self, status: ColmapPipelineStatus | None) -> None:
+        if status is None:
+            for label in (
+                self.colmap_resume_label,
+                self.colmap_run_start_label,
+                self.colmap_export_status_label,
+                self.colmap_feature_status_label,
+                self.colmap_rig_status_label,
+                self.colmap_match_status_label,
+                self.colmap_sparse_status_label,
+                self.colmap_rig_ba_status_label,
+                self.colmap_dense_status_label,
+                self.colmap_snapshot_status_label,
+            ):
+                label.setText("-")
+            return
+        self.colmap_resume_label.setText(status.next_step)
+        self.colmap_run_start_label.setText(colmap_run_start_text(status, self.colmap_overwrite_check.isChecked(), self.colmap_skip_completed_check.isChecked()))
+        self.colmap_export_status_label.setText(status.export_text)
+        self.colmap_feature_status_label.setText(step_status_text(status.feature_done))
+        self.colmap_rig_status_label.setText(step_status_text(status.rig_done))
+        self.colmap_match_status_label.setText(step_status_text(status.matching_done))
+        self.colmap_sparse_status_label.setText(f"{step_status_text(status.sparse_done)} | {status.sparse_registered_count} registered")
+        self.colmap_rig_ba_status_label.setText(
+            f"{step_status_text(status.rig_ba_done)} | {status.rig_ba_registered_count} registered"
+        )
+        self.colmap_dense_status_label.setText(step_status_text(status.dense_done))
+        self.colmap_snapshot_status_label.setText(
+            f"{status.snapshot_count} snapshots | latest {status.snapshot_registered_count} registered"
+        )
 
     def run_colmap_gui(self) -> None:
         if self.colmap_process is not None or self.worker_thread is not None:
@@ -1015,18 +1146,28 @@ class MainWindow(QMainWindow):
         colmap_path = self.colmap_path_edit.text().strip() or "colmap"
         self.colmap_log.clear()
         gpu_options = detect_colmap_gpu_options(colmap_path)
+        sparse_mapper = self.colmap_sparse_mapper_combo.currentText()
+        mapper_options = detect_colmap_mapper_options(colmap_path, sparse_mapper)
         if self.colmap_use_gpu_check.isChecked() and not (gpu_options.extraction_supported and gpu_options.matching_supported):
             self.append_colmap_log("GPU options unsupported by this COLMAP binary. Running without GPU flags.")
+        if self.colmap_snapshot_check.isChecked() and not mapper_options.snapshot_supported:
+            self.append_colmap_log("Mapper snapshot options unsupported by this COLMAP binary. Running without snapshots.")
         settings = ColmapRunSettings(
             colmap=colmap_path,
             tile_size=self.tile_size_spin.value(),
             fov_deg=float(self.fov_spin.value()),
             matcher=self.colmap_matcher_combo.currentText(),
+            sparse_mapper=sparse_mapper,
             skip_mapping=self.colmap_skip_mapping_check.isChecked(),
+            rig_bundle_adjustment=self.colmap_rig_ba_check.isChecked(),
+            dense_reconstruction=self.colmap_dense_check.isChecked(),
             skip_completed=self.colmap_skip_completed_check.isChecked(),
             use_gpu=self.colmap_use_gpu_check.isChecked(),
             gpu_index=self.colmap_gpu_index_edit.text().strip() or "-1",
+            mapper_snapshot_path=export_dir / "snapshots" if self.colmap_snapshot_check.isChecked() else None,
+            mapper_snapshot_images_freq=self.colmap_snapshot_freq_spin.value(),
             gpu_options=gpu_options,
+            mapper_options=mapper_options,
         )
         self.colmap_steps = build_colmap_steps(export_dir, settings)
         self.colmap_step_index = 0
@@ -1039,22 +1180,36 @@ class MainWindow(QMainWindow):
             self.append_colmap_log("All COLMAP steps already have output. Nothing to run.")
             return
         self.set_busy(True)
+        self.colmap_status_timer.start()
         self.start_next_colmap_step()
 
     def prepare_colmap_output(self, export_dir: Path) -> None:
         database_path = export_dir / "database.db"
         sparse_dir = export_dir / "sparse"
-        if self.colmap_overwrite_check.isChecked():
+        rig_ba_dir = export_dir / "sparse_rig_ba"
+        dense_dir = export_dir / "dense"
+        snapshot_dir = export_dir / "snapshots"
+        if should_overwrite_outputs(self.colmap_overwrite_check.isChecked(), self.colmap_skip_completed_check.isChecked()):
             if database_path.exists():
                 database_path.unlink()
             if sparse_dir.exists():
                 shutil.rmtree(sparse_dir)
+            if self.colmap_rig_ba_check.isChecked() and rig_ba_dir.exists():
+                shutil.rmtree(rig_ba_dir)
+            if self.colmap_dense_check.isChecked() and dense_dir.exists():
+                shutil.rmtree(dense_dir)
+            if self.colmap_snapshot_check.isChecked() and snapshot_dir.exists():
+                shutil.rmtree(snapshot_dir)
         sparse_dir.mkdir(parents=True, exist_ok=True)
+        if self.colmap_snapshot_check.isChecked():
+            snapshot_dir.mkdir(parents=True, exist_ok=True)
 
     def start_next_colmap_step(self) -> None:
         if self.colmap_step_index >= len(self.colmap_steps):
             self.colmap_process = None
             self.set_busy(False)
+            self.colmap_status_timer.stop()
+            self.refresh_colmap_export_info()
             self.colmap_stage_label.setText("Done")
             self.status_label.setText("COLMAP finished")
             self.append_colmap_log("COLMAP finished")
@@ -1092,17 +1247,22 @@ class MainWindow(QMainWindow):
         if self._colmap_cancelled:
             self.colmap_process = None
             self.set_busy(False)
+            self.colmap_status_timer.stop()
+            self.refresh_colmap_export_info()
             self.colmap_stage_label.setText("Cancelled")
             self.status_label.setText("COLMAP cancelled")
             return
         if exit_status != QProcess.ExitStatus.NormalExit or exit_code != 0:
             self.colmap_process = None
             self.set_busy(False)
+            self.colmap_status_timer.stop()
+            self.refresh_colmap_export_info()
             self.colmap_stage_label.setText("Failed")
             self.status_label.setText(f"COLMAP failed: exit {exit_code}")
             return
         self.colmap_step_index += 1
         self.colmap_progress.setValue(self.colmap_step_index)
+        self.refresh_colmap_export_info()
         self.colmap_process = None
         self.start_next_colmap_step()
 
@@ -1111,6 +1271,8 @@ class MainWindow(QMainWindow):
         if error == QProcess.ProcessError.FailedToStart:
             self.colmap_process = None
             self.set_busy(False)
+            self.colmap_status_timer.stop()
+            self.refresh_colmap_export_info()
             self.colmap_stage_label.setText("Failed")
             self.status_label.setText("COLMAP failed to start")
 
@@ -1173,6 +1335,180 @@ def colmap_image_mask_counts(images_dir: Path, masks_dir: Path) -> tuple[int, in
         if mask_path.exists():
             mask_count += 1
     return len(image_paths), mask_count
+
+
+@dataclass(frozen=True)
+class ColmapPipelineStatus:
+    image_count: int
+    mask_count: int
+    export_ready: bool
+    feature_done: bool
+    rig_done: bool
+    matching_done: bool
+    sparse_done: bool
+    rig_ba_done: bool
+    dense_done: bool
+    sparse_registered_count: int
+    rig_ba_registered_count: int
+    snapshot_count: int
+    snapshot_registered_count: int
+    next_step: str
+    export_text: str
+
+
+def colmap_pipeline_status(
+    export_dir: Path,
+    rig_ba_enabled: bool = False,
+    dense_enabled: bool = False,
+) -> ColmapPipelineStatus:
+    images_dir = export_dir / "images"
+    masks_dir = export_dir / "masks"
+    database_path = export_dir / "database.db"
+    sparse_dir = export_dir / "sparse"
+    rig_ba_dir = export_dir / "sparse_rig_ba"
+    dense_dir = export_dir / "dense"
+    snapshots_dir = export_dir / "snapshots"
+    image_count, mask_count = colmap_image_mask_counts(images_dir, masks_dir)
+    export_ready = image_count > 0 and masks_dir.exists() and (export_dir / "rig_config.json").exists()
+    feature_done = database_has_rows(database_path, "images")
+    rig_done = database_has_rows(database_path, "frames")
+    matching_done = database_has_rows(database_path, "matches")
+    sparse_done = sparse_model_exists(sparse_dir)
+    rig_ba_done = sparse_model_exists(rig_ba_dir)
+    dense_done = dense_model_exists(dense_dir)
+    sparse_registered_count = colmap_registered_image_count_in_root(sparse_dir)
+    rig_ba_registered_count = colmap_registered_image_count_in_root(rig_ba_dir)
+    snapshot_model_dirs = colmap_model_dirs(snapshots_dir)
+    snapshot_registered_count = colmap_registered_image_count_in_root(snapshots_dir)
+    next_step = next_colmap_step(
+        export_ready=export_ready,
+        feature_done=feature_done,
+        rig_done=rig_done,
+        matching_done=matching_done,
+        sparse_done=sparse_done,
+        rig_ba_done=rig_ba_done,
+        dense_done=dense_done,
+        rig_ba_enabled=rig_ba_enabled,
+        dense_enabled=dense_enabled,
+    )
+    export_text = "ready" if export_ready else "missing"
+    export_text = f"{export_text} | {image_count} images, {mask_count} masks"
+    return ColmapPipelineStatus(
+        image_count=image_count,
+        mask_count=mask_count,
+        export_ready=export_ready,
+        feature_done=feature_done,
+        rig_done=rig_done,
+        matching_done=matching_done,
+        sparse_done=sparse_done,
+        rig_ba_done=rig_ba_done,
+        dense_done=dense_done,
+        sparse_registered_count=sparse_registered_count,
+        rig_ba_registered_count=rig_ba_registered_count,
+        snapshot_count=len(snapshot_model_dirs),
+        snapshot_registered_count=snapshot_registered_count,
+        next_step=next_step,
+        export_text=export_text,
+    )
+
+
+def next_colmap_step(
+    *,
+    export_ready: bool,
+    feature_done: bool,
+    rig_done: bool,
+    matching_done: bool,
+    sparse_done: bool,
+    rig_ba_done: bool,
+    dense_done: bool,
+    rig_ba_enabled: bool,
+    dense_enabled: bool,
+) -> str:
+    if not export_ready:
+        return "Export COLMAP data"
+    if not feature_done:
+        return "Feature extraction"
+    if not rig_done:
+        return "Rig configuration"
+    if not matching_done:
+        return "Feature matching"
+    if not sparse_done:
+        return "Sparse mapping"
+    if rig_ba_enabled and not rig_ba_done:
+        return "Rig bundle adjustment"
+    if dense_enabled and not dense_done:
+        return "Dense reconstruction"
+    return "Complete"
+
+
+def colmap_run_start_text(status: ColmapPipelineStatus, overwrite: bool, skip_completed: bool) -> str:
+    if not status.export_ready:
+        return "Export required"
+    if skip_completed:
+        return status.next_step
+    if overwrite:
+        return "Feature extraction (overwrite)"
+    return "Feature extraction (no skip)"
+
+
+def step_status_text(done: bool) -> str:
+    return "done" if done else "pending"
+
+
+def colmap_registered_image_count(export_dir: Path) -> int:
+    model_dir = latest_colmap_model_dir(export_dir)
+    if model_dir is None:
+        return 0
+    return registered_images_in_model(model_dir)
+
+
+def colmap_registered_image_count_in_root(root: Path) -> int:
+    model_dirs = colmap_model_dirs(root)
+    if not model_dirs:
+        return 0
+    return registered_images_in_model(max(model_dirs, key=colmap_model_mtime))
+
+
+def latest_colmap_model_dir(export_dir: Path) -> Path | None:
+    candidates: list[Path] = []
+    for root in (export_dir / "sparse", export_dir / "snapshots"):
+        candidates.extend(colmap_model_dirs(root))
+    if not candidates:
+        return None
+    return max(candidates, key=colmap_model_mtime)
+
+
+def colmap_model_dirs(root: Path) -> list[Path]:
+    if not root.exists():
+        return []
+    paths = [root, *sorted(path for path in root.rglob("*") if path.is_dir())]
+    return [path for path in paths if (path / "images.bin").exists() or (path / "images.txt").exists()]
+
+
+def colmap_model_mtime(model_dir: Path) -> float:
+    for name in ("images.bin", "images.txt"):
+        path = model_dir / name
+        if path.exists():
+            return path.stat().st_mtime
+    return 0.0
+
+
+def registered_images_in_model(model_dir: Path) -> int:
+    images_bin = model_dir / "images.bin"
+    if images_bin.exists():
+        data = images_bin.read_bytes()[:8]
+        if len(data) == 8:
+            return int(struct.unpack("<Q", data)[0])
+        return 0
+    images_txt = model_dir / "images.txt"
+    if images_txt.exists():
+        lines = [
+            line
+            for line in images_txt.read_text(encoding="utf-8", errors="replace").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        return len(lines) // 2
+    return 0
 
 
 def default_colmap_executable() -> str:

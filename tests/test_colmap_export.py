@@ -10,7 +10,7 @@ from colmap_mask.core.image_io import load_mask, save_mask, save_rgb
 from colmap_mask.core.project_state import ImageItem
 
 
-def test_export_item_for_colmap_writes_18_images_and_masks(tmp_path: Path) -> None:
+def test_export_item_for_colmap_writes_12_images_and_masks(tmp_path: Path) -> None:
     image_path = tmp_path / "pano.jpg"
     mask_path = tmp_path / "masks" / "pano.mask.png"
     image = np.zeros((32, 64, 3), dtype=np.uint8)
@@ -31,8 +31,8 @@ def test_export_item_for_colmap_writes_18_images_and_masks(tmp_path: Path) -> No
 
     images = sorted((export_dir / "images").rglob("*.jpg"))
     masks = sorted((export_dir / "masks").rglob("*.png"))
-    assert len(images) == 18
-    assert len(masks) == 18
+    assert len(images) == 12
+    assert len(masks) == 12
     assert masks[0].name == "pano.jpg.png"
     assert load_mask(masks[0]).max() == 0
 
@@ -42,9 +42,17 @@ def test_write_colmap_metadata_writes_rig_config(tmp_path: Path) -> None:
 
     payload = json.loads((tmp_path / "rig_config.json").read_text(encoding="utf-8"))
     assert len(payload[0]["cameras"]) == len(virtual_cameras())
-    assert payload[0]["cameras"][0]["image_prefix"] == "cam01_y000_p+00/"
+    assert payload[0]["cameras"][0]["image_prefix"] == f"{virtual_cameras()[0].name}/"
     assert payload[0]["cameras"][0]["ref_sensor"] is True
     assert "cam_from_rig_rotation" not in payload[0]["cameras"][0]
     assert "ref_sensor" not in payload[0]["cameras"][1]
     assert "cam_from_rig_rotation" in payload[0]["cameras"][1]
     assert (tmp_path / "README_colmap.txt").exists()
+
+
+def test_virtual_cameras_use_tilted_icosahedron_without_pole_views() -> None:
+    cameras = virtual_cameras()
+
+    assert len(cameras) == 12
+    assert max(abs(camera.pitch_deg) for camera in cameras) < 75
+    assert len({camera.name for camera in cameras}) == 12
