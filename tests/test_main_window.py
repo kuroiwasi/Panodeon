@@ -137,7 +137,7 @@ def test_colmap_overwrite_is_checked_by_default() -> None:
     try:
         assert window.colmap_overwrite_check.isChecked()
         assert window.tile_size_spin.value() == 3072
-        assert window.colmap_matcher_combo.currentText() == "pairs"
+        assert window.colmap_matcher_combo.currentText() == "sequential"
         assert window.colmap_sparse_mapper_combo.currentText() == "mapper"
         assert window.colmap_use_gpu_check.isChecked()
         assert window.colmap_gpu_index_edit.text() == "-1"

@@ -37,6 +37,28 @@ def test_export_item_for_colmap_writes_12_images_and_masks(tmp_path: Path) -> No
     assert load_mask(masks[0]).max() == 0
 
 
+def test_export_item_for_colmap_combines_owner_and_person_masks(tmp_path: Path) -> None:
+    image_path = tmp_path / "pano.jpg"
+    mask_path = tmp_path / "masks" / "pano.mask.png"
+    image = np.zeros((64, 128, 3), dtype=np.uint8)
+    person_mask = np.zeros((64, 128), dtype=np.uint8)
+    save_rgb(image_path, image)
+    save_mask(mask_path, person_mask)
+    item = ImageItem(
+        path=image_path,
+        relative_dir=Path("."),
+        mask_path=mask_path,
+        direct_mask_path=tmp_path / "unused.direct.png",
+        cubemap_mask_path=tmp_path / "unused.cubemap.png",
+    )
+
+    export_dir = tmp_path / "exports"
+    export_item_for_colmap(item, export_dir, ColmapExportSettings(tile_size=32, fov_deg=90))
+
+    exported_masks = [load_mask(path) for path in sorted((export_dir / "masks").rglob("*.png"))]
+    assert any(mask.min() == 0 and mask.max() == 255 for mask in exported_masks)
+
+
 def test_write_colmap_metadata_writes_rig_config(tmp_path: Path) -> None:
     write_colmap_metadata(tmp_path, ColmapExportSettings(tile_size=1024, fov_deg=90))
 
@@ -50,9 +72,11 @@ def test_write_colmap_metadata_writes_rig_config(tmp_path: Path) -> None:
     assert (tmp_path / "README_colmap.txt").exists()
 
 
-def test_virtual_cameras_use_tilted_icosahedron_without_pole_views() -> None:
+def test_virtual_cameras_match_official_overlapping_panorama_layout() -> None:
     cameras = virtual_cameras()
 
     assert len(cameras) == 12
-    assert max(abs(camera.pitch_deg) for camera in cameras) < 75
+    assert {camera.pitch_deg for camera in cameras} == {-35.0, 0.0, 35.0}
+    assert {camera.yaw_deg for camera in cameras if camera.pitch_deg == -35.0} == {0.0, 90.0, 180.0, 270.0}
+    assert {camera.yaw_deg for camera in cameras if camera.pitch_deg == 35.0} == {45.0, 135.0, 225.0, 315.0}
     assert len({camera.name for camera in cameras}) == 12

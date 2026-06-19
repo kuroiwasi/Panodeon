@@ -41,7 +41,7 @@ def test_build_colmap_steps_can_skip_mapping(tmp_path) -> None:
     assert [step.name for step in steps] == [
         "Feature extraction",
         "Rig configuration",
-        "Pair-list matching",
+        "Sequential matching",
     ]
     assert steps[0].command[0] == "colmap.exe"
     assert "--SiftExtraction.max_num_features" in steps[0].command
@@ -50,7 +50,15 @@ def test_build_colmap_steps_can_skip_mapping(tmp_path) -> None:
     assert "--SiftExtraction.domain_size_pooling" not in steps[0].command
     assert steps[0].command[steps[0].command.index("--SiftExtraction.use_gpu") + 1] == "1"
     assert "--FeatureMatching.guided_matching" in steps[2].command
+    assert "--FeatureMatching.rig_verification" in steps[2].command
+    assert "--FeatureMatching.skip_image_pairs_in_same_frame" in steps[2].command
     assert steps[2].command[steps[2].command.index("--SiftMatching.use_gpu") + 1] == "1"
+    assert steps[2].command[1] == "sequential_matcher"
+
+
+def test_build_colmap_steps_can_use_pair_list_matching(tmp_path) -> None:
+    steps = build_colmap_steps(tmp_path, ColmapRunSettings(matcher="pairs", skip_mapping=True))
+    assert steps[2].name == "Pair-list matching"
     assert steps[2].command[1] == "matches_importer"
     assert (tmp_path / "match_pairs.txt").exists()
 

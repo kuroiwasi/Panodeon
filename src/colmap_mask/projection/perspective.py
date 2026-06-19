@@ -36,15 +36,7 @@ def equirect_to_perspective(
     if size <= 0:
         raise ValueError("size must be positive")
     height, width = image.shape[:2]
-    rot = camera_rotation(yaw_deg, pitch_deg)
-    half = math.tan(math.radians(fov_deg) * 0.5)
-    coords = (np.arange(size, dtype=np.float32) + 0.5) / size
-    px = (coords * 2.0 - 1.0) * half
-    py = (1.0 - coords * 2.0) * half
-    x_grid, y_grid = np.meshgrid(px, py)
-    camera_dirs = np.stack([x_grid, y_grid, np.ones_like(x_grid)], axis=-1)
-    camera_dirs /= np.linalg.norm(camera_dirs, axis=-1, keepdims=True)
-    world_dirs = camera_dirs @ rot.T
+    world_dirs = perspective_world_directions(yaw_deg, pitch_deg, size, fov_deg)
     map_x, map_y = sphere_to_equirect_uv(world_dirs, width, height)
     return cv2.remap(
         image,
@@ -53,6 +45,20 @@ def equirect_to_perspective(
         interpolation=interpolation,
         borderMode=cv2.BORDER_WRAP,
     )
+
+
+def perspective_world_directions(yaw_deg: float, pitch_deg: float, size: int, fov_deg: float = 90.0) -> np.ndarray:
+    if size <= 0:
+        raise ValueError("size must be positive")
+    rot = camera_rotation(yaw_deg, pitch_deg)
+    half = math.tan(math.radians(fov_deg) * 0.5)
+    coords = (np.arange(size, dtype=np.float32) + 0.5) / size
+    px = (coords * 2.0 - 1.0) * half
+    py = (1.0 - coords * 2.0) * half
+    x_grid, y_grid = np.meshgrid(px, py)
+    camera_dirs = np.stack([x_grid, y_grid, np.ones_like(x_grid)], axis=-1)
+    camera_dirs /= np.linalg.norm(camera_dirs, axis=-1, keepdims=True)
+    return camera_dirs @ rot.T
 
 
 def sphere_to_equirect_uv(direction: np.ndarray, width: int, height: int) -> tuple[np.ndarray, np.ndarray]:

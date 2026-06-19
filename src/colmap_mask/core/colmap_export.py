@@ -13,11 +13,12 @@ from colmap_mask.core.project_state import ImageItem
 from colmap_mask.projection.perspective import (
     camera_rotation,
     equirect_to_perspective,
+    perspective_world_directions,
     rotation_matrix_to_quaternion,
 )
 
-ICOSAHEDRON_X_ROTATION_DEG = 25.0
-ICOSAHEDRON_Z_ROTATION_DEG = 18.0
+PANORAMA_YAW_STEPS = 4
+PANORAMA_PITCHES_DEG = (-35.0, 0.0, 35.0)
 
 
 @dataclass(frozen=True)
@@ -39,78 +40,31 @@ class VirtualCamera:
 
 
 def virtual_cameras() -> list[VirtualCamera]:
-    directions = rotated_icosahedron_directions()
-    angles = [direction_to_yaw_pitch(direction) for direction in directions]
-    order = sorted(range(len(directions)), key=lambda index: (-angles[index][1], angles[index][0]))
-    return [
-        VirtualCamera(
-            camera_id=camera_id,
-            yaw_deg=angles[index][0],
-            pitch_deg=angles[index][1],
-            direction=tuple(float(value) for value in directions[index]),
-        )
-        for camera_id, index in enumerate(order, start=1)
-    ]
+    cameras: list[VirtualCamera] = []
+    yaw_step_deg = 360.0 / PANORAMA_YAW_STEPS
+    for pitch_deg in PANORAMA_PITCHES_DEG:
+        yaw_offset_deg = yaw_step_deg * 0.5 if pitch_deg > 0.0 else 0.0
+        for yaw_index in range(PANORAMA_YAW_STEPS):
+            yaw_deg = (yaw_index * yaw_step_deg + yaw_offset_deg) % 360.0
+            cameras.append(
+                VirtualCamera(
+                    camera_id=len(cameras) + 1,
+                    yaw_deg=yaw_deg,
+                    pitch_deg=pitch_deg,
+                    direction=direction_from_yaw_pitch(yaw_deg, pitch_deg),
+                )
+            )
+    return cameras
 
 
-def rotated_icosahedron_directions() -> list[np.ndarray]:
-    phi = (1.0 + math.sqrt(5.0)) * 0.5
-    vertices = [
-        (-1.0, phi, 0.0),
-        (1.0, phi, 0.0),
-        (-1.0, -phi, 0.0),
-        (1.0, -phi, 0.0),
-        (0.0, -1.0, phi),
-        (0.0, 1.0, phi),
-        (0.0, -1.0, -phi),
-        (0.0, 1.0, -phi),
-        (phi, 0.0, -1.0),
-        (phi, 0.0, 1.0),
-        (-phi, 0.0, -1.0),
-        (-phi, 0.0, 1.0),
-    ]
-    rotation = rotation_z(ICOSAHEDRON_Z_ROTATION_DEG) @ rotation_x(ICOSAHEDRON_X_ROTATION_DEG)
-    directions: list[np.ndarray] = []
-    for vertex in vertices:
-        direction = rotation @ np.asarray(vertex, dtype=np.float64)
-        direction /= np.linalg.norm(direction)
-        directions.append(direction)
-    return directions
-
-
-def rotation_x(angle_deg: float) -> np.ndarray:
-    angle = math.radians(angle_deg)
-    cos_a = math.cos(angle)
-    sin_a = math.sin(angle)
-    return np.asarray(
-        [
-            [1.0, 0.0, 0.0],
-            [0.0, cos_a, -sin_a],
-            [0.0, sin_a, cos_a],
-        ],
-        dtype=np.float64,
+def direction_from_yaw_pitch(yaw_deg: float, pitch_deg: float) -> tuple[float, float, float]:
+    yaw = math.radians(yaw_deg)
+    pitch = math.radians(pitch_deg)
+    return (
+        math.sin(yaw) * math.cos(pitch),
+        math.sin(pitch),
+        math.cos(yaw) * math.cos(pitch),
     )
-
-
-def rotation_z(angle_deg: float) -> np.ndarray:
-    angle = math.radians(angle_deg)
-    cos_a = math.cos(angle)
-    sin_a = math.sin(angle)
-    return np.asarray(
-        [
-            [cos_a, -sin_a, 0.0],
-            [sin_a, cos_a, 0.0],
-            [0.0, 0.0, 1.0],
-        ],
-        dtype=np.float64,
-    )
-
-
-def direction_to_yaw_pitch(direction: np.ndarray) -> tuple[float, float]:
-    x, y, z = (float(value) for value in direction)
-    yaw = math.degrees(math.atan2(x, z)) % 360.0
-    pitch = math.degrees(math.asin(max(-1.0, min(1.0, y))))
-    return yaw, pitch
 
 
 def round_angle_for_name(angle_deg: float) -> int:
@@ -124,7 +78,8 @@ def export_item_for_colmap(
 ) -> None:
     image = load_rgb(item.path)
     mask = load_mask(item.mask_path, image.shape[:2])
-    for camera in virtual_cameras():
+    cameras = virtual_cameras()
+    for camera in cameras:
         rel_name = item.relative_dir / item.path.name
         image_path = export_dir / "images" / camera.name / rel_name
         mask_path = export_dir / "masks" / camera.name / rel_name.with_name(f"{rel_name.name}.png")
@@ -144,7 +99,9 @@ def export_item_for_colmap(
             settings.fov_deg,
             interpolation=cv2.INTER_NEAREST,
         )
-        colmap_mask = np.where(tile_mask > 127, 0, 255).astype(np.uint8)
+        owner_mask = virtual_camera_owner_mask(camera, cameras, settings.tile_size, settings.fov_deg)
+        valid_mask = owner_mask & (tile_mask <= 127)
+        colmap_mask = np.where(valid_mask, 255, 0).astype(np.uint8)
         save_rgb(image_path, tile)
         save_mask(mask_path, colmap_mask)
 
@@ -187,11 +144,23 @@ def world_from_colmap_camera(camera: VirtualCamera) -> np.ndarray:
     return rotation @ np.diag([1.0, -1.0, 1.0])
 
 
+def virtual_camera_owner_mask(
+    camera: VirtualCamera,
+    cameras: list[VirtualCamera],
+    tile_size: int,
+    fov_deg: float,
+) -> np.ndarray:
+    world_dirs = perspective_world_directions(camera.yaw_deg, camera.pitch_deg, tile_size, fov_deg)
+    camera_dirs = np.asarray([other.direction for other in cameras], dtype=np.float32)
+    closest_camera_ids = np.argmax(world_dirs @ camera_dirs.T, axis=-1) + 1
+    return closest_camera_ids == camera.camera_id
+
+
 def write_readme(export_dir: Path, settings: ColmapExportSettings) -> None:
     text = f"""COLMAP export
 
 images/: projected perspective images.
-masks/: COLMAP feature masks. Black pixels are ignored by feature extraction.
+masks/: COLMAP feature masks. Black pixels are ignored by feature extraction. Pixels are valid only for their nearest virtual camera and non-person regions.
 rig_config.json: input for colmap rig_configurator.
 
 Example:

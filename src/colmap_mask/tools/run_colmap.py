@@ -45,7 +45,7 @@ class ColmapRunSettings:
     colmap: str = "colmap"
     tile_size: int = 3072
     fov_deg: float = 90.0
-    matcher: str = "pairs"
+    matcher: str = "sequential"
     sparse_mapper: str = "mapper"
     camera_model: str = "PINHOLE"
     skip_mapping: bool = False
@@ -75,7 +75,7 @@ def main() -> int:
     parser.add_argument("--colmap", default="colmap", help="COLMAP executable path.")
     parser.add_argument("--tile-size", type=int, default=3072, help="Perspective tile size used during export.")
     parser.add_argument("--fov", type=float, default=90.0, help="Perspective FOV used during export.")
-    parser.add_argument("--matcher", choices=("pairs", "exhaustive", "sequential", "vocab_tree"), default="pairs")
+    parser.add_argument("--matcher", choices=("sequential", "pairs", "exhaustive", "vocab_tree"), default="sequential")
     parser.add_argument("--sparse-mapper", choices=("mapper", "hierarchical_mapper"), default="mapper")
     parser.add_argument("--camera-model", default="PINHOLE")
     parser.add_argument("--camera-neighbors", type=int, default=4, help="Nearest virtual cameras to match across neighboring frames.")
@@ -244,6 +244,10 @@ def build_colmap_steps(export_dir: Path, settings: ColmapRunSettings) -> list[Co
             "pairs",
             "--FeatureMatching.guided_matching",
             "1",
+            "--FeatureMatching.rig_verification",
+            "1",
+            "--FeatureMatching.skip_image_pairs_in_same_frame",
+            "1",
         ]
         if settings.use_gpu and settings.gpu_options.matching_supported:
             match_command.extend(
@@ -263,6 +267,10 @@ def build_colmap_steps(export_dir: Path, settings: ColmapRunSettings) -> list[Co
             "--database_path",
             str(database_path),
             "--FeatureMatching.guided_matching",
+            "1",
+            "--FeatureMatching.rig_verification",
+            "1",
+            "--FeatureMatching.skip_image_pairs_in_same_frame",
             "1",
         ]
         if settings.use_gpu and settings.gpu_options.matching_supported:

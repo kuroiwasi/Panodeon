@@ -429,7 +429,7 @@ class MainWindow(QMainWindow):
         colmap_path_layout.addWidget(self.colmap_browse_button)
 
         self.colmap_matcher_combo = QComboBox()
-        self.colmap_matcher_combo.addItems(["pairs", "exhaustive", "sequential", "vocab_tree"])
+        self.colmap_matcher_combo.addItems(["sequential", "pairs", "exhaustive", "vocab_tree"])
         self.colmap_sparse_mapper_combo = QComboBox()
         self.colmap_sparse_mapper_combo.addItems(["mapper", "hierarchical_mapper"])
         self.colmap_overwrite_check = QCheckBox("Overwrite outputs")
