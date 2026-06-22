@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "trajectory": {
+    "jitter_threshold": 0.0
+  },
+  "sampling": {
+    "scale_mode": "robust_extent",
+    "radius": null,
+    "radius_ratio": 0.01,
+    "target_count": null,
+    "force_first_frame": true,
+    "force_segment_endpoints": false,
+    "allow_weak_tracking": false,
+    "distance_tolerance": 0.000001,
+    "tie_distance_ratio": 0.001
+  },
+  "continuity": {
+    "enabled": true,
+    "max_path_gap_ratio": 2.0,
+    "bridge_min_separation_ratios": [0.25, 0.1],
+    "bridge_max_recursion_depth": 12,
+    "orb": {
+      "enabled": true,
+      "max_width": 720,
+      "feature_count": 1000,
+      "ratio_test": 0.75,
+      "min_inliers": 40,
+      "min_inlier_ratio": 0.2,
+      "ransac_threshold": 2.0,
+      "spherical": false,
+      "tangent_layout": "cubemap",
+      "tangent_fov_deg": 90.0,
+      "tangent_size": 512,
+      "tangent_yaw_count": 6,
+      "tangent_pitch_deg": [-30.0, 0.0, 30.0],
+      "spherical_ransac_threshold": 0.01
+    }
+  }
+}

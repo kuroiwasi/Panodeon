@@ -5,9 +5,10 @@ description = "Generate editable person masks and COLMAP perspective tiles from 
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.26",
-    "opencv-python>=4.9",
+    "opencv-python-headless>=4.9",
     "pillow>=10.0",
     "pyside6>=6.6",
+    "av>=12.0",
 ]
 
 [project.optional-dependencies]
@@ -26,10 +27,9 @@ dev = [
 
 [project.scripts]
 colmap-mask = "colmap_mask.app:main"
-colmap-mask-download-model = "colmap_mask.tools.download_model:main"
 colmap-mask-run-colmap = "colmap_mask.tools.run_colmap:main"
-colmap-mask-setup-colmap = "colmap_mask.tools.setup_colmap:main"
-colmap-mask-setup-third-party = "colmap_mask.tools.setup_third_party:main"
+colmap-mask-sample = "colmap_mask.sampler.cli:main"
+colmap-mask-sample-video = "colmap_mask.sampler.video_cli:main"
 
 [build-system]
 requires = ["setuptools>=68"]

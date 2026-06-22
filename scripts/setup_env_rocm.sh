@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd "$(dirname "$0")"
+# Resolve the project root (this script lives in scripts/).
+cd "$(dirname "$0")/.."
 
 PYTHON_BIN="${PYTHON_BIN:-python3.10}"
 ROCM_ONNXRUNTIME_WHEEL="${ROCM_ONNXRUNTIME_WHEEL:-https://repo.radeon.com/rocm/manylinux/rocm-rel-6.1.3/onnxruntime_rocm-1.17.0-cp310-cp310-linux_x86_64.whl}"

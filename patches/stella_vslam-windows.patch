@@ -1,0 +1,29 @@
+diff --git a/scripts/windows/Build.bat b/scripts/windows/Build.bat
+index e68ad2f..ab0b641 100644
+--- a/scripts/windows/Build.bat
++++ b/scripts/windows/Build.bat
+@@ -37,7 +37,7 @@ if "%param_1%" == "setup" (
+     git clone -b 2020.11-1 https://github.com/microsoft/vcpkg.git
+     cd vcpkg
+     call bootstrap-vcpkg.bat
+-    call vcpkg.exe install g2o suitesparse yaml-cpp eigen3 glog opencv --triplet x64-windows-static
++    call vcpkg.exe install g2o suitesparse yaml-cpp eigen3 glog opencv sqlite3 --triplet x64-windows-static
+ )
+ 
+ 
+diff --git a/src/stella_vslam/feature/orb_impl.cc b/src/stella_vslam/feature/orb_impl.cc
+index 8370840..ab16284 100644
+--- a/src/stella_vslam/feature/orb_impl.cc
++++ b/src/stella_vslam/feature/orb_impl.cc
+@@ -37,6 +37,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ #include "stella_vslam/feature/orb_point_pairs.h"
+ #include "stella_vslam/util/trigonometric.h"
+ 
++#ifndef M_PI
++#define M_PI 3.14159265358979323846
++#endif
++
+ #ifdef USE_SSE_ORB
+ #ifdef _MSC_VER
+ #include <intrin.h>
+

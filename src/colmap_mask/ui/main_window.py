@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 import shutil
 import struct
+import subprocess
+import sys
 from pathlib import Path
 
 import cv2
 import numpy as np
-from PySide6.QtCore import QProcess, QThread, QTimer, Qt
+from PySide6.QtCore import QProcess, QProcessEnvironment, QThread, QTimer, Qt, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -59,6 +63,14 @@ from colmap_mask.tools.run_colmap import (
     sparse_model_exists,
     validate_export_dir,
 )
+from colmap_mask.sampler import events as sampler_events
+from colmap_mask.sampler.workflow import (
+    PipelineSettings,
+    PipelineStep,
+    build_pipeline_steps,
+    project_root as sampler_project_root,
+)
+from colmap_mask.sampler.resume import load_workflow_state, step_is_complete, step_key, step_signature
 from colmap_mask.ui.image_canvas import ImageCanvas
 from colmap_mask.ui.workers import TaskWorker
 
@@ -289,6 +301,12 @@ class MainWindow(QMainWindow):
         self.colmap_steps: list[ColmapStep] = []
         self.colmap_step_index = 0
         self._colmap_cancelled = False
+        self.sampler_process: QProcess | None = None
+        self.sampler_steps: list[PipelineStep] = []
+        self.sampler_step_index = 0
+        self._sampler_cancelled = False
+        self.sampler_output_dir: Path | None = None
+        self._sampler_stdout_buffer = ""
         self._busy = False
         self.preview_timer = QTimer(self)
         self.preview_timer.setSingleShot(True)
@@ -327,6 +345,17 @@ class MainWindow(QMainWindow):
         colmap_scroll.setWidgetResizable(True)
         colmap_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         colmap_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # Sampler tab: like the COLMAP tab it is a tall form stack, so wrap it in a
+        # scroll area to keep the window from inheriting a large minimum height.
+        # It is the leftmost tab because it is the first step of the workflow
+        # (sample frames from a 360 video before masking and COLMAP export).
+        sampler_tab = self._build_sampler_tab()
+        sampler_scroll = QScrollArea()
+        sampler_scroll.setWidget(sampler_tab)
+        sampler_scroll.setWidgetResizable(True)
+        sampler_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        sampler_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.tabs.addTab(sampler_scroll, "Sampler")
         self.tabs.addTab(mask_tab, "Mask")
         self.tabs.addTab(colmap_scroll, "COLMAP")
 
@@ -631,9 +660,377 @@ class MainWindow(QMainWindow):
         self.undo_button.clicked.connect(self.undo)
         self.redo_button.clicked.connect(self.redo)
         self.cancel_button.clicked.connect(self.cancel_current_task)
+        self.sampler_video_browse_button.clicked.connect(self.browse_sampler_video)
+        self.sampler_output_browse_button.clicked.connect(self.browse_sampler_output)
+        self.sampler_exe_browse_button.clicked.connect(self.browse_sampler_executable)
+        self.sampler_vocab_browse_button.clicked.connect(self.browse_sampler_vocabulary)
+        self.sampler_camera_browse_button.clicked.connect(self.browse_sampler_camera_config)
+        self.sampler_config_browse_button.clicked.connect(self.browse_sampler_config)
+        self.run_sampler_button.clicked.connect(self.run_sampler_gui)
+        self.sampler_visualize_button.clicked.connect(self.open_sampler_visualization)
         self.update_brush()
         self._set_tooltips()
         self._update_generate_buttons()
+
+    def _build_sampler_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+
+        group_input = QGroupBox("Frame Sampler")
+        form = QFormLayout(group_input)
+        form.setContentsMargins(10, 15, 10, 10)
+        form.setSpacing(8)
+
+        self.sampler_video_edit = QLineEdit()
+        self.sampler_video_browse_button = QPushButton("...")
+        self.sampler_video_browse_button.setObjectName("toolButton")
+        video_row = QHBoxLayout()
+        video_row.setContentsMargins(0, 0, 0, 0)
+        video_row.setSpacing(4)
+        video_row.addWidget(self.sampler_video_edit)
+        video_row.addWidget(self.sampler_video_browse_button)
+
+        self.sampler_output_edit = QLineEdit()
+        self.sampler_output_browse_button = QPushButton("...")
+        self.sampler_output_browse_button.setObjectName("toolButton")
+        output_row = QHBoxLayout()
+        output_row.setContentsMargins(0, 0, 0, 0)
+        output_row.setSpacing(4)
+        output_row.addWidget(self.sampler_output_edit)
+        output_row.addWidget(self.sampler_output_browse_button)
+
+        self.sampler_frame_skip_spin = QSpinBox()
+        self.sampler_frame_skip_spin.setRange(1, 30)
+        self.sampler_frame_skip_spin.setValue(2)
+        self.sampler_format_combo = QComboBox()
+        self.sampler_format_combo.addItems(["jpg", "png"])
+        self.sampler_jpeg_quality_spin = QSpinBox()
+        self.sampler_jpeg_quality_spin.setRange(1, 100)
+        self.sampler_jpeg_quality_spin.setValue(95)
+
+        form.addRow("Video", video_row)
+        form.addRow("Output", output_row)
+        form.addRow("Frame Skip", self.sampler_frame_skip_spin)
+        form.addRow("Image Format", self.sampler_format_combo)
+        form.addRow("JPEG Quality", self.sampler_jpeg_quality_spin)
+        layout.addWidget(group_input)
+
+        group_advanced = QGroupBox("Sampler Advanced")
+        adv = QFormLayout(group_advanced)
+        adv.setContentsMargins(10, 15, 10, 10)
+        adv.setSpacing(8)
+
+        self.sampler_exe_edit = QLineEdit(default_sampler_executable())
+        self.sampler_exe_browse_button = QPushButton("...")
+        self.sampler_exe_browse_button.setObjectName("toolButton")
+        exe_row = QHBoxLayout()
+        exe_row.setContentsMargins(0, 0, 0, 0)
+        exe_row.setSpacing(4)
+        exe_row.addWidget(self.sampler_exe_edit)
+        exe_row.addWidget(self.sampler_exe_browse_button)
+
+        self.sampler_vocab_edit = QLineEdit(default_sampler_vocabulary())
+        self.sampler_vocab_browse_button = QPushButton("...")
+        self.sampler_vocab_browse_button.setObjectName("toolButton")
+        vocab_row = QHBoxLayout()
+        vocab_row.setContentsMargins(0, 0, 0, 0)
+        vocab_row.setSpacing(4)
+        vocab_row.addWidget(self.sampler_vocab_edit)
+        vocab_row.addWidget(self.sampler_vocab_browse_button)
+
+        self.sampler_camera_edit = QLineEdit()
+        self.sampler_camera_browse_button = QPushButton("...")
+        self.sampler_camera_browse_button.setObjectName("toolButton")
+        camera_row = QHBoxLayout()
+        camera_row.setContentsMargins(0, 0, 0, 0)
+        camera_row.setSpacing(4)
+        camera_row.addWidget(self.sampler_camera_edit)
+        camera_row.addWidget(self.sampler_camera_browse_button)
+
+        self.sampler_config_edit = QLineEdit()
+        self.sampler_config_browse_button = QPushButton("...")
+        self.sampler_config_browse_button.setObjectName("toolButton")
+        config_row = QHBoxLayout()
+        config_row.setContentsMargins(0, 0, 0, 0)
+        config_row.setSpacing(4)
+        config_row.addWidget(self.sampler_config_edit)
+        config_row.addWidget(self.sampler_config_browse_button)
+
+        adv.addRow("SLAM Exe", exe_row)
+        adv.addRow("ORB Vocab", vocab_row)
+        adv.addRow("Camera Config", camera_row)
+        adv.addRow("Sampler Config", config_row)
+        layout.addWidget(group_advanced)
+
+        group_run = QGroupBox("Sampler Run")
+        run_form = QFormLayout(group_run)
+        run_form.setContentsMargins(10, 15, 10, 10)
+        run_form.setSpacing(8)
+        self.sampler_progress = QProgressBar()
+        self.sampler_progress.setRange(0, 1000)
+        self.sampler_progress.setValue(0)
+        self.sampler_stage_label = QLabel("Idle")
+        self.sampler_stage_label.setWordWrap(True)
+        self.sampler_substage_label = QLabel("-")
+        self.sampler_substage_label.setWordWrap(True)
+        self.sampler_log = QPlainTextEdit()
+        self.sampler_log.setReadOnly(True)
+        self.sampler_log.setMaximumHeight(160)
+        self.run_sampler_button = QPushButton("Run Sampler")
+        self.run_sampler_button.setObjectName("primaryButton")
+        self.sampler_visualize_button = QPushButton("Show Trajectory")
+        self.sampler_visualize_button.setObjectName("toolButton")
+        self.sampler_visualize_button.setEnabled(False)
+        run_buttons = QHBoxLayout()
+        run_buttons.setContentsMargins(0, 0, 0, 0)
+        run_buttons.setSpacing(6)
+        run_buttons.addWidget(self.run_sampler_button)
+        run_buttons.addWidget(self.sampler_visualize_button)
+
+        run_form.addRow("Progress", self.sampler_progress)
+        run_form.addRow("Stage", self.sampler_stage_label)
+        run_form.addRow("Detail", self.sampler_substage_label)
+        run_form.addRow("Log", self.sampler_log)
+        run_form.addRow("", run_buttons)
+        layout.addWidget(group_run)
+        layout.addStretch()
+        return tab
+
+    def browse_sampler_video(self) -> None:
+        path_text, _ = QFileDialog.getOpenFileName(
+            self, "Select 360 video", filter="Video (*.mp4 *.mov *.mkv *.avi *.m4v *.webm *.insv);;All (*.*)"
+        )
+        if not path_text:
+            return
+        self.sampler_video_edit.setText(path_text)
+        if not self.sampler_output_edit.text().strip():
+            source = Path(path_text)
+            self.sampler_output_edit.setText(str(source.parent / f"{source.stem}_frames"))
+
+    def browse_sampler_output(self) -> None:
+        path_text = QFileDialog.getExistingDirectory(self, "Select sampler output folder")
+        if path_text:
+            self.sampler_output_edit.setText(path_text)
+
+    def browse_sampler_executable(self) -> None:
+        path_text, _ = QFileDialog.getOpenFileName(self, "Select run_video_slam executable")
+        if path_text:
+            self.sampler_exe_edit.setText(path_text)
+
+    def browse_sampler_vocabulary(self) -> None:
+        path_text, _ = QFileDialog.getOpenFileName(self, "Select ORB vocabulary", filter="FBoW (*.fbow);;All (*.*)")
+        if path_text:
+            self.sampler_vocab_edit.setText(path_text)
+
+    def browse_sampler_camera_config(self) -> None:
+        path_text, _ = QFileDialog.getOpenFileName(self, "Select camera config", filter="YAML (*.yaml *.yml);;All (*.*)")
+        if path_text:
+            self.sampler_camera_edit.setText(path_text)
+
+    def browse_sampler_config(self) -> None:
+        path_text, _ = QFileDialog.getOpenFileName(self, "Select sampler config", filter="JSON (*.json);;All (*.*)")
+        if path_text:
+            self.sampler_config_edit.setText(path_text)
+
+    def _sampler_settings(self) -> PipelineSettings:
+        video = self.sampler_video_edit.text().strip()
+        output = self.sampler_output_edit.text().strip()
+        if not video:
+            raise ValueError("Select a video")
+        if not output:
+            raise ValueError("Select an output folder")
+        camera = self.sampler_camera_edit.text().strip()
+        config = self.sampler_config_edit.text().strip()
+        return PipelineSettings(
+            video_path=Path(video),
+            output_dir=Path(output),
+            executable=Path(self.sampler_exe_edit.text().strip()),
+            vocabulary=Path(self.sampler_vocab_edit.text().strip()),
+            frame_skip=self.sampler_frame_skip_spin.value(),
+            image_format=self.sampler_format_combo.currentText(),
+            jpeg_quality=self.sampler_jpeg_quality_spin.value(),
+            camera_config=Path(camera) if camera else None,
+            sampler_config=Path(config) if config else None,
+        )
+
+    def run_sampler_gui(self) -> None:
+        if self.sampler_process is not None or self.worker_thread is not None or self.colmap_process is not None:
+            self.status_label.setText("Task already running")
+            return
+        try:
+            settings = self._sampler_settings()
+            settings.validate()
+        except (Exception, SystemExit) as exc:
+            self.status_label.setText(short_error(exc))
+            QMessageBox.warning(self, "Sampler", str(exc))
+            return
+        all_steps = build_pipeline_steps(settings, python_executable=Path(sys.executable))
+        self.sampler_steps = self._sampler_pending_steps(settings, all_steps)
+        self.sampler_output_dir = settings.output_dir
+        self.sampler_step_index = 0
+        self._sampler_cancelled = False
+        self._sampler_stdout_buffer = ""
+        self.sampler_log.clear()
+        self.sampler_substage_label.setText("-")
+        self.sampler_progress.setRange(0, 1000)
+        self.sampler_progress.setValue(0)
+        settings.output_dir.mkdir(parents=True, exist_ok=True)
+        if not self.sampler_steps:
+            self.sampler_stage_label.setText("Done")
+            self.status_label.setText("Sampler already complete")
+            self.append_sampler_log("All sampler steps already have output. Nothing to run.")
+            self._finish_sampler_run()
+            return
+        self.set_busy(True)
+        self.start_next_sampler_step()
+
+    def _sampler_pending_steps(self, settings: PipelineSettings, steps: tuple[PipelineStep, ...]) -> list[PipelineStep]:
+        # Reuse the sampler's own resume signatures so any stage whose outputs already
+        # exist (e.g. a user-supplied stella/trajectory.csv) is skipped. This is what
+        # lets the pipeline run without run_video_slam.exe when upstream artifacts exist.
+        state = load_workflow_state(settings.output_dir)
+        pending: list[PipelineStep] = []
+        for step in steps:
+            try:
+                key = step_key(step.name)
+                signature = step_signature(settings, key)
+                complete = step_is_complete(settings, key, state, signature)
+            except (KeyError, OSError, ValueError):
+                complete = False
+            if complete:
+                self.append_sampler_log(f"[再利用] {step.name}")
+            else:
+                pending.append(step)
+        return pending
+
+    def start_next_sampler_step(self) -> None:
+        if self.sampler_step_index >= len(self.sampler_steps):
+            self.sampler_process = None
+            self.set_busy(False)
+            self.sampler_stage_label.setText("Done")
+            self.status_label.setText("Sampler finished")
+            self.append_sampler_log("Sampler finished")
+            self._finish_sampler_run()
+            return
+        step = self.sampler_steps[self.sampler_step_index]
+        self.sampler_stage_label.setText(f"{self.sampler_step_index + 1}/{len(self.sampler_steps)} {step.name}")
+        self.status_label.setText(step.name)
+        self.append_sampler_log(f"> {' '.join(step.command)}")
+        self.sampler_progress.setValue(int(step.progress_start * 1000))
+        self._sampler_stdout_buffer = ""
+        process = QProcess(self)
+        process.setWorkingDirectory(str(sampler_project_root()))
+        environment = QProcessEnvironment.systemEnvironment()
+        environment.insert("PYTHONUTF8", "1")
+        environment.insert("PYTHONIOENCODING", "utf-8")
+        environment.insert("FRAME_SAMPLER_ROOT", str(sampler_project_root()))
+        process.setProcessEnvironment(environment)
+        process.readyReadStandardOutput.connect(self.read_sampler_stdout)
+        process.readyReadStandardError.connect(self.read_sampler_stderr)
+        process.finished.connect(self.on_sampler_finished)
+        process.errorOccurred.connect(self.on_sampler_error)
+        self.sampler_process = process
+        process.start(step.command[0], step.command[1:])
+
+    def read_sampler_stdout(self) -> None:
+        if self.sampler_process is None:
+            return
+        self._sampler_stdout_buffer += bytes(self.sampler_process.readAllStandardOutput()).decode(errors="replace")
+        # Only parse complete, newline-terminated lines: a partial JSON chunk must not
+        # be handed to json.loads. Keep any trailing fragment for the next read.
+        while "\n" in self._sampler_stdout_buffer:
+            line, self._sampler_stdout_buffer = self._sampler_stdout_buffer.split("\n", 1)
+            self._handle_sampler_line(line.rstrip("\r"))
+
+    def _handle_sampler_line(self, line: str) -> None:
+        if not line.strip():
+            return
+        formatted = sampler_events.format_log_line(line)
+        if formatted is not None:
+            self.append_sampler_log(formatted)
+        substage = sampler_events.substage_name(line)
+        if substage is not None:
+            self.sampler_substage_label.setText(substage)
+        extract_status = sampler_events.extract_progress_status(line)
+        if extract_status is not None:
+            self.sampler_substage_label.setText(extract_status)
+        local = sampler_events.local_progress(line)
+        if local is not None and self.sampler_step_index < len(self.sampler_steps):
+            step = self.sampler_steps[self.sampler_step_index]
+            overall = sampler_events.overall_progress(step.progress_start, step.progress_end, local)
+            self.sampler_progress.setValue(int(overall * 1000))
+
+    def read_sampler_stderr(self) -> None:
+        if self.sampler_process is None:
+            return
+        self.append_sampler_log(bytes(self.sampler_process.readAllStandardError()).decode(errors="replace").rstrip())
+
+    def append_sampler_log(self, text: str) -> None:
+        if text:
+            self.sampler_log.appendPlainText(text)
+
+    def on_sampler_finished(self, exit_code: int, exit_status: QProcess.ExitStatus) -> None:
+        if self.sampler_process is None:
+            return
+        if self._sampler_cancelled:
+            self.sampler_process = None
+            self.set_busy(False)
+            self.sampler_stage_label.setText("Cancelled")
+            self.status_label.setText("Sampler cancelled")
+            return
+        if exit_status != QProcess.ExitStatus.NormalExit or exit_code != 0:
+            self.sampler_process = None
+            self.set_busy(False)
+            self.sampler_stage_label.setText("Failed")
+            self.status_label.setText(f"Sampler failed: exit {exit_code}")
+            return
+        step = self.sampler_steps[self.sampler_step_index]
+        self.sampler_progress.setValue(int(step.progress_end * 1000))
+        self.sampler_step_index += 1
+        self.sampler_process = None
+        self.start_next_sampler_step()
+
+    def on_sampler_error(self, error: QProcess.ProcessError) -> None:
+        self.append_sampler_log(f"Sampler process error: {error.name}")
+        if error == QProcess.ProcessError.FailedToStart:
+            self.sampler_process = None
+            self.set_busy(False)
+            self.sampler_stage_label.setText("Failed")
+            self.status_label.setText("Sampler failed to start. Check the Python environment.")
+
+    def _finish_sampler_run(self) -> None:
+        self._refresh_sampler_visualize_button()
+        if self.sampler_output_dir is None:
+            return
+        frames_dir = self.sampler_output_dir / "frames"
+        if not frames_dir.is_dir() or not any(frames_dir.iterdir()):
+            self.status_label.setText("Sampler produced no frames")
+            return
+        self.load_folder(frames_dir)
+
+    def _refresh_sampler_visualize_button(self) -> None:
+        path = self._sampler_visualization_path()
+        self.sampler_visualize_button.setEnabled(path is not None and path.is_file())
+
+    def _sampler_visualization_path(self) -> Path | None:
+        if self.sampler_output_dir is None:
+            output = self.sampler_output_edit.text().strip()
+            if not output:
+                return None
+            base = Path(output)
+        else:
+            base = self.sampler_output_dir
+        return base / "sampled" / "trajectory_visualization.html"
+
+    def open_sampler_visualization(self) -> None:
+        path = self._sampler_visualization_path()
+        if path is None or not path.is_file():
+            QMessageBox.information(self, "Trajectory", "The trajectory visualization has not been generated yet.")
+            self._refresh_sampler_visualize_button()
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.resolve())))
 
     def _set_tooltips(self) -> None:
         self.open_button.setToolTip("Open a folder containing panorama images.")
@@ -670,6 +1067,17 @@ class MainWindow(QMainWindow):
         self.run_colmap_button.setToolTip("Run COLMAP on the current exports folder.")
         self.image_list.setToolTip("Images found in the selected folder.")
         self.canvas.setToolTip("Preview canvas. Wheel to zoom. Draw with left mouse button.")
+        self.sampler_video_edit.setToolTip("360 video to sample frames from.")
+        self.sampler_output_edit.setToolTip("Sampler work folder. Frames load from its frames/ subfolder when done.")
+        self.sampler_frame_skip_spin.setToolTip("SLAM frame skip. 2 favours speed, 1 favours accuracy.")
+        self.sampler_format_combo.setToolTip("Extracted image format.")
+        self.sampler_jpeg_quality_spin.setToolTip("JPEG quality for extracted frames.")
+        self.sampler_exe_edit.setToolTip("stella_vslam run_video_slam executable.")
+        self.sampler_vocab_edit.setToolTip("ORB vocabulary (.fbow) used by stella_vslam.")
+        self.sampler_camera_edit.setToolTip("Optional stella camera config (.yaml). Auto-generated if empty.")
+        self.sampler_config_edit.setToolTip("Optional frame-selection config (.json). Defaults are used if empty.")
+        self.run_sampler_button.setToolTip("Run proxy, SLAM, selection, and extraction. Completed stages are skipped.")
+        self.sampler_visualize_button.setToolTip("Open the trajectory visualization HTML in the browser.")
 
     def open_folder(self) -> None:
         folder_text = QFileDialog.getExistingDirectory(self, "Open image folder")
@@ -1040,6 +1448,12 @@ class MainWindow(QMainWindow):
             thread.quit()
 
     def cancel_current_task(self) -> None:
+        if self.sampler_process is not None:
+            self._sampler_cancelled = True
+            self._kill_sampler_process_tree()
+            self.cancel_button.setEnabled(False)
+            self.status_label.setText("Cancelling Sampler...")
+            return
         if self.colmap_process is not None:
             self._colmap_cancelled = True
             self.colmap_process.kill()
@@ -1057,6 +1471,23 @@ class MainWindow(QMainWindow):
         self.status_label.setText("Task cancelled. Finished images were kept.")
         if self.current_item:
             self.select_image(self.image_list.currentItem())
+
+    def _kill_sampler_process_tree(self) -> None:
+        process = self.sampler_process
+        if process is None:
+            return
+        pid = process.processId()
+        # The sampler child launches run_video_slam.exe; kill() alone orphans it, so
+        # tear down the whole tree on Windows (mirrors sampler workflow.PipelineExecutor.cancel).
+        if os.name == "nt" and pid:
+            subprocess.run(
+                ("taskkill", "/PID", str(pid), "/T", "/F"),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        process.kill()
 
     def set_busy(self, busy: bool) -> None:
         self._busy = busy
@@ -1081,6 +1512,22 @@ class MainWindow(QMainWindow):
             self.colmap_gpu_index_edit,
             self.colmap_snapshot_check,
             self.colmap_snapshot_freq_spin,
+            self.run_sampler_button,
+            self.sampler_video_edit,
+            self.sampler_video_browse_button,
+            self.sampler_output_edit,
+            self.sampler_output_browse_button,
+            self.sampler_frame_skip_spin,
+            self.sampler_format_combo,
+            self.sampler_jpeg_quality_spin,
+            self.sampler_exe_edit,
+            self.sampler_exe_browse_button,
+            self.sampler_vocab_edit,
+            self.sampler_vocab_browse_button,
+            self.sampler_camera_edit,
+            self.sampler_camera_browse_button,
+            self.sampler_config_edit,
+            self.sampler_config_browse_button,
         ):
             widget.setEnabled(not busy)
         self.cancel_button.setEnabled(busy)
@@ -1330,7 +1777,7 @@ class MainWindow(QMainWindow):
             self.status_label.setText("COLMAP failed to start")
 
     def closeEvent(self, event) -> None:  # noqa: N802
-        if self.worker_thread is not None or self.colmap_process is not None:
+        if self.worker_thread is not None or self.colmap_process is not None or self.sampler_process is not None:
             self.status_label.setText("Task running")
             event.ignore()
             return
@@ -1576,6 +2023,16 @@ def default_colmap_executable() -> str:
         if candidate.exists():
             return str(candidate)
     return "colmap"
+
+
+def default_sampler_executable() -> str:
+    candidate = sampler_project_root() / "third_party" / "runtime" / "run_video_slam.exe"
+    return str(candidate)
+
+
+def default_sampler_vocabulary() -> str:
+    candidate = sampler_project_root() / "third_party" / "FBoW_orb_vocab" / "orb_vocab.fbow"
+    return str(candidate)
 
 
 def dropped_path_from_mime(mime_data) -> Path | None:

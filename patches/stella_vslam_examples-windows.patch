@@ -1,0 +1,169 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index c45faec..b793ee4 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1,4 +1,5 @@
+-cmake_minimum_required(VERSION 3.1)
++cmake_minimum_required(VERSION 3.15)
++set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+ project(stella_vslam_examples LANGUAGES CXX C)
+ 
+ # ----- Find dependencies -----
+diff --git a/src/run_camera_slam.cc b/src/run_camera_slam.cc
+index 9883f64..300fa47 100644
+--- a/src/run_camera_slam.cc
++++ b/src/run_camera_slam.cc
+@@ -542,15 +542,15 @@ int main(int argc, char* argv[]) {
+         need_initialize = false;
+         const auto path = fs::path(map_db_path_in->value());
+         if (path.extension() == ".yaml") {
+-            YAML::Node node = YAML::LoadFile(path);
++            YAML::Node node = YAML::LoadFile(path.string());
+             for (const auto& map_path : node["maps"].as<std::vector<std::string>>()) {
+-                if (!slam->load_map_database(path.parent_path() / map_path)) {
++                if (!slam->load_map_database((path.parent_path() / map_path).string())) {
+                     return EXIT_FAILURE;
+                 }
+             }
+         }
+         else {
+-            if (!slam->load_map_database(path)) {
++            if (!slam->load_map_database(path.string())) {
+                 return EXIT_FAILURE;
+             }
+         }
+diff --git a/src/run_euroc_slam.cc b/src/run_euroc_slam.cc
+index 7b98368..7f271be 100644
+--- a/src/run_euroc_slam.cc
++++ b/src/run_euroc_slam.cc
+@@ -645,15 +645,15 @@ int main(int argc, char* argv[]) {
+         need_initialize = false;
+         const auto path = fs::path(map_db_path_in->value());
+         if (path.extension() == ".yaml") {
+-            YAML::Node node = YAML::LoadFile(path);
++            YAML::Node node = YAML::LoadFile(path.string());
+             for (const auto& map_path : node["maps"].as<std::vector<std::string>>()) {
+-                if (!slam->load_map_database(path.parent_path() / map_path)) {
++                if (!slam->load_map_database((path.parent_path() / map_path).string())) {
+                     return EXIT_FAILURE;
+                 }
+             }
+         }
+         else {
+-            if (!slam->load_map_database(path)) {
++            if (!slam->load_map_database(path.string())) {
+                 return EXIT_FAILURE;
+             }
+         }
+diff --git a/src/run_image_slam.cc b/src/run_image_slam.cc
+index caa3b0f..6c6909c 100644
+--- a/src/run_image_slam.cc
++++ b/src/run_image_slam.cc
+@@ -413,15 +413,15 @@ int main(int argc, char* argv[]) {
+         need_initialize = false;
+         const auto path = fs::path(map_db_path_in->value());
+         if (path.extension() == ".yaml") {
+-            YAML::Node node = YAML::LoadFile(path);
++            YAML::Node node = YAML::LoadFile(path.string());
+             for (const auto& map_path : node["maps"].as<std::vector<std::string>>()) {
+-                if (!slam->load_map_database(path.parent_path() / map_path)) {
++                if (!slam->load_map_database((path.parent_path() / map_path).string())) {
+                     return EXIT_FAILURE;
+                 }
+             }
+         }
+         else {
+-            if (!slam->load_map_database(path)) {
++            if (!slam->load_map_database(path.string())) {
+                 return EXIT_FAILURE;
+             }
+         }
+diff --git a/src/run_kitti_slam.cc b/src/run_kitti_slam.cc
+index 93ba621..77ac19c 100644
+--- a/src/run_kitti_slam.cc
++++ b/src/run_kitti_slam.cc
+@@ -613,15 +613,15 @@ int main(int argc, char* argv[]) {
+         need_initialize = false;
+         const auto path = fs::path(map_db_path_in->value());
+         if (path.extension() == ".yaml") {
+-            YAML::Node node = YAML::LoadFile(path);
++            YAML::Node node = YAML::LoadFile(path.string());
+             for (const auto& map_path : node["maps"].as<std::vector<std::string>>()) {
+-                if (!slam->load_map_database(path.parent_path() / map_path)) {
++                if (!slam->load_map_database((path.parent_path() / map_path).string())) {
+                     return EXIT_FAILURE;
+                 }
+             }
+         }
+         else {
+-            if (!slam->load_map_database(path)) {
++            if (!slam->load_map_database(path.string())) {
+                 return EXIT_FAILURE;
+             }
+         }
+diff --git a/src/run_tum_rgbd_slam.cc b/src/run_tum_rgbd_slam.cc
+index ad6f37f..9776e15 100644
+--- a/src/run_tum_rgbd_slam.cc
++++ b/src/run_tum_rgbd_slam.cc
+@@ -604,15 +604,15 @@ int main(int argc, char* argv[]) {
+         need_initialize = false;
+         const auto path = fs::path(map_db_path_in->value());
+         if (path.extension() == ".yaml") {
+-            YAML::Node node = YAML::LoadFile(path);
++            YAML::Node node = YAML::LoadFile(path.string());
+             for (const auto& map_path : node["maps"].as<std::vector<std::string>>()) {
+-                if (!slam->load_map_database(path.parent_path() / map_path)) {
++                if (!slam->load_map_database((path.parent_path() / map_path).string())) {
+                     return EXIT_FAILURE;
+                 }
+             }
+         }
+         else {
+-            if (!slam->load_map_database(path)) {
++            if (!slam->load_map_database(path.string())) {
+                 return EXIT_FAILURE;
+             }
+         }
+diff --git a/src/run_video_slam.cc b/src/run_video_slam.cc
+index 7cdf2da..244b527 100644
+--- a/src/run_video_slam.cc
++++ b/src/run_video_slam.cc
+@@ -21,6 +21,7 @@
+ #include <opencv2/core/mat.hpp>
+ #include <opencv2/core/types.hpp>
+ #include <opencv2/imgcodecs.hpp>
++#include <opencv2/imgproc.hpp>
+ #include <opencv2/videoio.hpp>
+ #include <spdlog/spdlog.h>
+ #include <popl.hpp>
+@@ -167,6 +168,11 @@ int mono_tracking(const std::shared_ptr<stella_vslam::system>& slam,
+             const auto tp_1 = std::chrono::steady_clock::now();
+ 
+             if (!frame.empty() && (num_frame % frame_skip == 0)) {
++                const auto camera = slam->get_camera();
++                if (frame.cols != static_cast<int>(camera->cols_)
++                    || frame.rows != static_cast<int>(camera->rows_)) {
++                    cv::resize(frame, frame, cv::Size(camera->cols_, camera->rows_), 0.0, 0.0, cv::INTER_AREA);
++                }
+                 // input the current frame and estimate the camera pose
+                 slam->feed_monocular_frame(frame, timestamp, mask);
+             }
+@@ -425,15 +431,15 @@ int main(int argc, char* argv[]) {
+         need_initialize = false;
+         const auto path = fs::path(map_db_path_in->value());
+         if (path.extension() == ".yaml") {
+-            YAML::Node node = YAML::LoadFile(path);
++            YAML::Node node = YAML::LoadFile(path.string());
+             for (const auto& map_path : node["maps"].as<std::vector<std::string>>()) {
+-                if (!slam->load_map_database(path.parent_path() / map_path)) {
++                if (!slam->load_map_database((path.parent_path() / map_path).string())) {
+                     return EXIT_FAILURE;
+                 }
+             }
+         }
+         else {
+-            if (!slam->load_map_database(path)) {
++            if (!slam->load_map_database(path.string())) {
+                 return EXIT_FAILURE;
+             }
+         }
