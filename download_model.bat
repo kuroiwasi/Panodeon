@@ -11,4 +11,4 @@ if not exist ".venv\Scripts\python.exe" (
 ".venv\Scripts\python.exe" -m pip install -e .[inference]
 if errorlevel 1 exit /b 1
 
-".venv\Scripts\colmap-mask-download-model.exe" --output-dir models
+".venv\Scripts\colmap-mask-download-model.exe" --output-dir third_party\models

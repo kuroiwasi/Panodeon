@@ -30,7 +30,7 @@ def safe_extract(archive: tarfile.TarFile, output_dir: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Download DEIMv2 Wholebody49 resources.")
     parser.add_argument("--url", default=DEFAULT_URL)
-    parser.add_argument("--output-dir", type=Path, default=Path("models"))
+    parser.add_argument("--output-dir", type=Path, default=Path("third_party") / "models")
     args = parser.parse_args()
     download(args.url, args.output_dir)
     print(f"Downloaded to {args.output_dir}")

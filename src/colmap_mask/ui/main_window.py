@@ -750,7 +750,7 @@ class MainWindow(QMainWindow):
         self.model_combo.blockSignals(True)
         self.model_combo.clear()
         self.model_combo.addItem("Stub / no model", None)
-        model_dir = Path(__file__).resolve().parents[3] / "models"
+        model_dir = Path(__file__).resolve().parents[3] / "third_party" / "models"
         for path in sorted(model_dir.glob("*.onnx")):
             self.model_combo.addItem(path.name, str(path))
         if current:
@@ -1526,8 +1526,8 @@ def registered_images_in_model(model_dir: Path) -> int:
 def default_colmap_executable() -> str:
     project_root = Path(__file__).resolve().parents[3]
     candidates = [
-        project_root / "tools" / "colmap" / "bin" / "colmap.exe",
-        project_root / "tools" / "colmap" / "bin" / "colmap",
+        project_root / "third_party" / "colmap" / "bin" / "colmap.exe",
+        project_root / "third_party" / "colmap" / "bin" / "colmap",
     ]
     for candidate in candidates:
         if candidate.exists():
