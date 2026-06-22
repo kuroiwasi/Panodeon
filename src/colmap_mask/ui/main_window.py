@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QInputDialog,
+    QScrollArea,
     QSplitter,
     QSpinBox,
     QTabWidget,
@@ -73,6 +74,13 @@ QWidget {
     color: #e0e0e0;
     font-family: 'Segoe UI', 'Inter', 'Meiryo', sans-serif;
     font-size: 9pt;
+}
+QScrollArea {
+    background: transparent;
+    border: none;
+}
+QScrollArea > QWidget > QWidget {
+    background: transparent;
 }
 QSplitter::handle {
     background-color: #1d1d1d;
@@ -311,8 +319,16 @@ class MainWindow(QMainWindow):
         colmap_layout = QVBoxLayout(colmap_tab)
         colmap_layout.setContentsMargins(8, 8, 8, 8)
         colmap_layout.setSpacing(8)
+        # The COLMAP tab is a tall stack of forms; wrap it in a scroll area so
+        # it does not impose a large minimum height on the whole window (the
+        # tab widget's minimum height is that of its tallest tab).
+        colmap_scroll = QScrollArea()
+        colmap_scroll.setWidget(colmap_tab)
+        colmap_scroll.setWidgetResizable(True)
+        colmap_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        colmap_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.tabs.addTab(mask_tab, "Mask")
-        self.tabs.addTab(colmap_tab, "COLMAP")
+        self.tabs.addTab(colmap_scroll, "COLMAP")
 
         # Mask tab: three resizable columns (image list / canvas / settings).
         mask_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -562,7 +578,15 @@ class MainWindow(QMainWindow):
         mask_layout.addLayout(export_buttons)
         mask_layout.addStretch()
 
-        mask_splitter.addWidget(right)
+        # Wrap the settings column in a scroll area so the window can shrink
+        # vertically below the column's natural minimum height; the controls
+        # scroll instead of forcing the whole window taller.
+        right_scroll = QScrollArea()
+        right_scroll.setWidget(right)
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        mask_splitter.addWidget(right_scroll)
         mask_splitter.setSizes([220, 820, 280])
 
         # Status label and cancel button share a single bottom row across all
