@@ -8,3 +8,4 @@ third_party/models/*.pt
 masks/
 exports/
 *.egg-info/
+docs/
