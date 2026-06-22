@@ -293,12 +293,29 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         root = QWidget()
         self.setCentralWidget(root)
-        main_layout = QHBoxLayout(root)
+        main_layout = QVBoxLayout(root)
         main_layout.setContentsMargins(10, 10, 10, 10)
         main_layout.setSpacing(10)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        main_layout.addWidget(splitter)
+        # Top-level tabs. New first-level tabs can be added with a single
+        # self.tabs.addTab(...) call below; each tab is a plain container widget.
+        self.tabs = QTabWidget()
+        main_layout.addWidget(self.tabs, 1)
+
+        mask_tab = QWidget()
+        mask_tab_layout = QHBoxLayout(mask_tab)
+        mask_tab_layout.setContentsMargins(8, 8, 8, 8)
+        mask_tab_layout.setSpacing(8)
+        colmap_tab = QWidget()
+        colmap_layout = QVBoxLayout(colmap_tab)
+        colmap_layout.setContentsMargins(8, 8, 8, 8)
+        colmap_layout.setSpacing(8)
+        self.tabs.addTab(mask_tab, "Mask")
+        self.tabs.addTab(colmap_tab, "COLMAP")
+
+        # Mask tab: three resizable columns (image list / canvas / settings).
+        mask_splitter = QSplitter(Qt.Orientation.Horizontal)
+        mask_tab_layout.addWidget(mask_splitter)
 
         left = QWidget()
         left_layout = QVBoxLayout()
@@ -311,29 +328,16 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.open_button)
         left_layout.addWidget(self.image_list)
         left.setLayout(left_layout)
-        splitter.addWidget(left)
+        mask_splitter.addWidget(left)
 
         self.canvas = ImageCanvas()
         self.canvas.setStyleSheet("border: 1px solid #1d1d1d; border-radius: 4px;")
-        splitter.addWidget(self.canvas)
+        mask_splitter.addWidget(self.canvas)
 
         right = QWidget()
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(8)
-
-        self.right_tabs = QTabWidget()
-        mask_tab = QWidget()
-        mask_layout = QVBoxLayout(mask_tab)
-        mask_layout.setContentsMargins(8, 8, 8, 8)
+        mask_layout = QVBoxLayout(right)
+        mask_layout.setContentsMargins(0, 0, 0, 0)
         mask_layout.setSpacing(8)
-        colmap_tab = QWidget()
-        colmap_layout = QVBoxLayout(colmap_tab)
-        colmap_layout.setContentsMargins(8, 8, 8, 8)
-        colmap_layout.setSpacing(8)
-        self.right_tabs.addTab(mask_tab, "Mask")
-        self.right_tabs.addTab(colmap_tab, "COLMAP")
-        right_layout.addWidget(self.right_tabs, 1)
 
         # 1. AI Model Config Group
         group_model = QGroupBox("AI Model Settings")
@@ -557,18 +561,26 @@ class MainWindow(QMainWindow):
         mask_layout.addLayout(export_buttons)
         mask_layout.addStretch()
 
-        self.cancel_button = QPushButton("Cancel Task")
-        self.cancel_button.setObjectName("toolButton")
-        self.cancel_button.setEnabled(False)
-        right_layout.addWidget(self.cancel_button)
+        mask_splitter.addWidget(right)
+        mask_splitter.setSizes([220, 820, 280])
+
+        # Status label and cancel button share a single bottom row across all
+        # tabs: status fills the left, the cancel button stays fixed on the right.
+        status_bar = QHBoxLayout()
+        status_bar.setContentsMargins(0, 0, 0, 0)
+        status_bar.setSpacing(8)
 
         self.status_label = QLabel("No folder")
         self.status_label.setWordWrap(True)
         self.status_label.setStyleSheet("color: #808080; font-size: 8pt; padding: 4px;")
-        right_layout.addWidget(self.status_label)
+        status_bar.addWidget(self.status_label, 1)
 
-        splitter.addWidget(right)
-        splitter.setSizes([220, 820, 280])
+        self.cancel_button = QPushButton("Cancel Task")
+        self.cancel_button.setObjectName("toolButton")
+        self.cancel_button.setEnabled(False)
+        status_bar.addWidget(self.cancel_button, 0)
+
+        main_layout.addLayout(status_bar)
 
         self.open_button.clicked.connect(self.open_folder)
         self.model_button.clicked.connect(self.refresh_model_list)
