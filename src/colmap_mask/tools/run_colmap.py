@@ -215,7 +215,8 @@ def build_colmap_steps(export_dir: Path, settings: ColmapRunSettings) -> list[Co
             ]
         )
     steps: list[ColmapStep] = []
-    if not (settings.skip_completed and database_has_rows(database_path, "images")):
+    image_count = colmap_image_count(export_dir / "images")
+    if not (settings.skip_completed and feature_extraction_done(database_path, image_count)):
         steps.append(ColmapStep("Feature extraction", feature_command))
     if not (settings.skip_completed and database_has_rows(database_path, "frames")):
         steps.append(
@@ -409,8 +410,12 @@ def build_colmap_steps(export_dir: Path, settings: ColmapRunSettings) -> list[Co
 
 
 def database_has_rows(database_path: Path, table_name: str) -> bool:
+    return database_table_count(database_path, table_name) > 0
+
+
+def database_table_count(database_path: Path, table_name: str) -> int:
     if not database_path.exists():
-        return False
+        return 0
     try:
         with sqlite3.connect(str(database_path)) as connection:
             row = connection.execute(
@@ -418,11 +423,26 @@ def database_has_rows(database_path: Path, table_name: str) -> bool:
                 (table_name,),
             ).fetchone()
             if row is None:
-                return False
+                return 0
             count = connection.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
     except sqlite3.Error:
+        return 0
+    return int(count)
+
+
+def colmap_image_count(images_dir: Path) -> int:
+    if not images_dir.exists():
+        return 0
+    return sum(1 for path in images_dir.rglob("*") if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS)
+
+
+def feature_extraction_done(database_path: Path, expected_images: int) -> bool:
+    if expected_images <= 0:
         return False
-    return int(count) > 0
+    return (
+        database_table_count(database_path, "images") >= expected_images
+        and database_table_count(database_path, "keypoints") >= expected_images
+    )
 
 
 def sparse_model_exists(sparse_dir: Path) -> bool:

@@ -53,6 +53,7 @@ from colmap_mask.tools.run_colmap import (
     detect_colmap_gpu_options,
     detect_colmap_mapper_options,
     dense_model_exists,
+    feature_extraction_done,
     should_overwrite_outputs,
     sparse_model_exists,
     validate_export_dir,
@@ -1100,15 +1101,19 @@ class MainWindow(QMainWindow):
         self.colmap_image_count_label.setText(str(image_count))
         self.colmap_mask_count_label.setText(str(mask_count))
         self.colmap_registered_count_label.setText(f"{registered_count} / {image_count}")
+        running_step = None
+        if self.colmap_process is not None and self.colmap_step_index < len(self.colmap_steps):
+            running_step = self.colmap_steps[self.colmap_step_index].name
         self.update_colmap_status_panel(
             colmap_pipeline_status(
                 self.state.export_dir,
                 rig_ba_enabled=self.colmap_rig_ba_check.isChecked(),
                 dense_enabled=self.colmap_dense_check.isChecked(),
-            )
+            ),
+            running_step=running_step,
         )
 
-    def update_colmap_status_panel(self, status: ColmapPipelineStatus | None) -> None:
+    def update_colmap_status_panel(self, status: ColmapPipelineStatus | None, running_step: str | None = None) -> None:
         if status is None:
             for label in (
                 self.colmap_resume_label,
@@ -1127,14 +1132,26 @@ class MainWindow(QMainWindow):
         self.colmap_resume_label.setText(status.next_step)
         self.colmap_run_start_label.setText(colmap_run_start_text(status, self.colmap_overwrite_check.isChecked(), self.colmap_skip_completed_check.isChecked()))
         self.colmap_export_status_label.setText(status.export_text)
-        self.colmap_feature_status_label.setText(step_status_text(status.feature_done))
-        self.colmap_rig_status_label.setText(step_status_text(status.rig_done))
-        self.colmap_match_status_label.setText(step_status_text(status.matching_done))
-        self.colmap_sparse_status_label.setText(f"{step_status_text(status.sparse_done)} | {status.sparse_registered_count} registered")
-        self.colmap_rig_ba_status_label.setText(
-            f"{step_status_text(status.rig_ba_done)} | {status.rig_ba_registered_count} registered"
+        self.colmap_feature_status_label.setText(step_status_text(status.feature_done, running_step == "Feature extraction"))
+        self.colmap_rig_status_label.setText(step_status_text(status.rig_done, running_step == "Rig configuration"))
+        self.colmap_match_status_label.setText(
+            step_status_text(
+                status.matching_done,
+                running_step in ("Pair-list matching", "Sequential matching", "Exhaustive matching", "Vocab_Tree matching"),
+            )
         )
-        self.colmap_dense_status_label.setText(step_status_text(status.dense_done))
+        self.colmap_sparse_status_label.setText(
+            f"{step_status_text(status.sparse_done, running_step in ('Sparse mapping', 'Hierarchical sparse mapping'))} | {status.sparse_registered_count} registered"
+        )
+        self.colmap_rig_ba_status_label.setText(
+            f"{step_status_text(status.rig_ba_done, running_step == 'Rig bundle adjustment')} | {status.rig_ba_registered_count} registered"
+        )
+        self.colmap_dense_status_label.setText(
+            step_status_text(
+                status.dense_done,
+                running_step in ("Image undistortion", "Patch-match stereo", "Stereo fusion"),
+            )
+        )
         self.colmap_snapshot_status_label.setText(
             f"{status.snapshot_count} snapshots | latest {status.snapshot_registered_count} registered"
         )
@@ -1274,8 +1291,8 @@ class MainWindow(QMainWindow):
             return
         self.colmap_step_index += 1
         self.colmap_progress.setValue(self.colmap_step_index)
-        self.refresh_colmap_export_info()
         self.colmap_process = None
+        self.refresh_colmap_export_info()
         self.start_next_colmap_step()
 
     def on_colmap_error(self, error: QProcess.ProcessError) -> None:
@@ -1382,7 +1399,7 @@ def colmap_pipeline_status(
     snapshots_dir = export_dir / "snapshots"
     image_count, mask_count = colmap_image_mask_counts(images_dir, masks_dir)
     export_ready = image_count > 0 and masks_dir.exists() and (export_dir / "rig_config.json").exists()
-    feature_done = database_has_rows(database_path, "images")
+    feature_done = feature_extraction_done(database_path, image_count)
     rig_done = database_has_rows(database_path, "frames")
     matching_done = database_has_rows(database_path, "matches")
     sparse_done = sparse_model_exists(sparse_dir)
@@ -1463,7 +1480,9 @@ def colmap_run_start_text(status: ColmapPipelineStatus, overwrite: bool, skip_co
     return "Feature extraction (no skip)"
 
 
-def step_status_text(done: bool) -> str:
+def step_status_text(done: bool, running: bool = False) -> str:
+    if running:
+        return "running"
     return "done" if done else "pending"
 
 

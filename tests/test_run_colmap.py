@@ -16,6 +16,7 @@ from colmap_mask.tools.run_colmap import (
     database_has_rows,
     dense_model_exists,
     detect_colmap_mapper_options,
+    feature_extraction_done,
     select_supported_options,
     best_reconstruction_model_dir,
     should_overwrite_outputs,
@@ -284,6 +285,21 @@ def test_database_has_rows_detects_existing_table(tmp_path) -> None:
     assert not database_has_rows(database_path, "matches")
 
 
+def test_feature_extraction_done_requires_keypoints_for_all_images(tmp_path) -> None:
+    database_path = tmp_path / "database.db"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("CREATE TABLE images(image_id INTEGER)")
+        connection.execute("INSERT INTO images VALUES (1)")
+        connection.execute("CREATE TABLE keypoints(image_id INTEGER)")
+
+    assert not feature_extraction_done(database_path, expected_images=1)
+
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("INSERT INTO keypoints VALUES (1)")
+
+    assert feature_extraction_done(database_path, expected_images=1)
+
+
 def test_sparse_model_exists_detects_mapper_output(tmp_path) -> None:
     model_dir = tmp_path / "sparse" / "0"
     model_dir.mkdir(parents=True)
@@ -293,10 +309,15 @@ def test_sparse_model_exists_detects_mapper_output(tmp_path) -> None:
 
 
 def test_build_colmap_steps_skips_completed_outputs(tmp_path) -> None:
+    image_path = tmp_path / "images" / "cam01" / "frame_000001.jpg"
+    image_path.parent.mkdir(parents=True)
+    image_path.write_bytes(b"")
     database_path = tmp_path / "database.db"
     with sqlite3.connect(database_path) as connection:
         connection.execute("CREATE TABLE images(image_id INTEGER)")
         connection.execute("INSERT INTO images VALUES (1)")
+        connection.execute("CREATE TABLE keypoints(image_id INTEGER)")
+        connection.execute("INSERT INTO keypoints VALUES (1)")
         connection.execute("CREATE TABLE frames(frame_id INTEGER)")
         connection.execute("INSERT INTO frames VALUES (1)")
         connection.execute("CREATE TABLE matches(pair_id INTEGER)")

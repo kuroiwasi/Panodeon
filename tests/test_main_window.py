@@ -17,6 +17,7 @@ from colmap_mask.ui.main_window import (
     dropped_path_from_mime,
     folder_from_mime,
     short_error,
+    step_status_text,
 )
 
 
@@ -24,6 +25,13 @@ def test_short_error_limits_multiline_message() -> None:
     message = short_error(RuntimeError("line1\n" + "x" * 300), limit=20)
     assert "\n" not in message
     assert len(message) <= 23
+
+
+def test_step_status_text_prefers_running() -> None:
+    assert step_status_text(True, running=True) == "running"
+    assert step_status_text(False, running=True) == "running"
+    assert step_status_text(True) == "done"
+    assert step_status_text(False) == "pending"
 
 
 def test_folder_from_mime_accepts_directory(tmp_path: Path) -> None:
@@ -89,6 +97,8 @@ def test_colmap_pipeline_status_detects_resume_step(tmp_path: Path) -> None:
     with sqlite3.connect(export_dir / "database.db") as connection:
         connection.execute("CREATE TABLE images(image_id INTEGER)")
         connection.execute("INSERT INTO images VALUES (1)")
+        connection.execute("CREATE TABLE keypoints(image_id INTEGER)")
+        connection.execute("INSERT INTO keypoints VALUES (1)")
         connection.execute("CREATE TABLE frames(frame_id INTEGER)")
         connection.execute("INSERT INTO frames VALUES (1)")
 
@@ -101,6 +111,26 @@ def test_colmap_pipeline_status_detects_resume_step(tmp_path: Path) -> None:
     assert status.next_step == "Feature matching"
     assert colmap_run_start_text(status, overwrite=False, skip_completed=True) == "Feature matching"
     assert colmap_run_start_text(status, overwrite=True, skip_completed=False) == "Feature extraction (overwrite)"
+
+
+def test_colmap_pipeline_status_keeps_partial_feature_extraction_pending(tmp_path: Path) -> None:
+    export_dir = tmp_path / "exports"
+    images_dir = export_dir / "images" / "cam01"
+    masks_dir = export_dir / "masks" / "cam01"
+    images_dir.mkdir(parents=True)
+    masks_dir.mkdir(parents=True)
+    (images_dir / "frame_000001.jpg").write_bytes(b"")
+    (masks_dir / "frame_000001.jpg.png").write_bytes(b"")
+    (export_dir / "rig_config.json").write_text("{}", encoding="utf-8")
+    with sqlite3.connect(export_dir / "database.db") as connection:
+        connection.execute("CREATE TABLE images(image_id INTEGER)")
+        connection.execute("INSERT INTO images VALUES (1)")
+        connection.execute("CREATE TABLE keypoints(image_id INTEGER)")
+
+    status = colmap_pipeline_status(export_dir)
+
+    assert not status.feature_done
+    assert status.next_step == "Feature extraction"
 
 
 def test_colmap_pipeline_status_detects_rig_ba_step(tmp_path: Path) -> None:
@@ -119,6 +149,8 @@ def test_colmap_pipeline_status_detects_rig_ba_step(tmp_path: Path) -> None:
     with sqlite3.connect(export_dir / "database.db") as connection:
         connection.execute("CREATE TABLE images(image_id INTEGER)")
         connection.execute("INSERT INTO images VALUES (1)")
+        connection.execute("CREATE TABLE keypoints(image_id INTEGER)")
+        connection.execute("INSERT INTO keypoints VALUES (1)")
         connection.execute("CREATE TABLE frames(frame_id INTEGER)")
         connection.execute("INSERT INTO frames VALUES (1)")
         connection.execute("CREATE TABLE matches(pair_id INTEGER)")
