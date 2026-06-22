@@ -28,6 +28,8 @@ dev = [
 colmap-mask = "colmap_mask.app:main"
 colmap-mask-download-model = "colmap_mask.tools.download_model:main"
 colmap-mask-run-colmap = "colmap_mask.tools.run_colmap:main"
+colmap-mask-setup-colmap = "colmap_mask.tools.setup_colmap:main"
+colmap-mask-setup-third-party = "colmap_mask.tools.setup_third_party:main"
 
 [build-system]
 requires = ["setuptools>=68"]
