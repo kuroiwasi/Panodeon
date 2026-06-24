@@ -15,4 +15,4 @@ $CudnnBin = Join-Path $ProjectRoot ".venv\Lib\site-packages\nvidia\cudnn\bin"
 $CublasBin = Join-Path $ProjectRoot ".venv\Lib\site-packages\nvidia\cublas\bin"
 $env:PATH = "$CudnnBin;$CublasBin;$env:PATH"
 
-Start-Process -FilePath $Pythonw -ArgumentList "-m", "colmap_mask.app" -WorkingDirectory $ProjectRoot
+Start-Process -FilePath $Pythonw -ArgumentList "-m", "panodeon.app" -WorkingDirectory $ProjectRoot

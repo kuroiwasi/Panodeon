@@ -8,8 +8,8 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from colmap_mask.core.colmap_export import virtual_cameras
-from colmap_mask.core.image_io import IMAGE_EXTENSIONS
+from panodeon.core.colmap_export import virtual_cameras
+from panodeon.core.image_io import IMAGE_EXTENSIONS
 
 
 @dataclass(frozen=True)
@@ -70,7 +70,7 @@ class ColmapStep:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run COLMAP on a 360 Colmap Mask export folder.")
+    parser = argparse.ArgumentParser(description="Run COLMAP on a Panodeon export folder.")
     parser.add_argument("export_dir", type=Path, help="Folder containing images/, masks/, and rig_config.json.")
     parser.add_argument("--colmap", default="colmap", help="COLMAP executable path.")
     parser.add_argument("--tile-size", type=int, default=3072, help="Perspective tile size used during export.")

@@ -7,8 +7,8 @@ from typing import Callable
 import cv2
 import numpy as np
 
-from colmap_mask.core.mask_ops import postprocess_mask
-from colmap_mask.projection.cubemap import CUBE_FACES, accumulate_face_mask, equirect_to_face
+from panodeon.core.mask_ops import postprocess_mask
+from panodeon.projection.cubemap import CUBE_FACES, accumulate_face_mask, equirect_to_face
 
 from .base import JobCancelled, MaskOptions, MaskResult, Segmenter
 

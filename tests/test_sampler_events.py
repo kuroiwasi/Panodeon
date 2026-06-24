@@ -1,6 +1,6 @@
 import json
 
-from colmap_mask.sampler import events
+from panodeon.sampler import events
 
 
 def _line(payload: dict) -> str:

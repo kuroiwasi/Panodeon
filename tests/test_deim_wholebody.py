@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from colmap_mask.generators.base import MaskOptions
-from colmap_mask.inference.deim_wholebody import (
+from panodeon.generators.base import MaskOptions
+from panodeon.inference.deim_wholebody import (
     DeimWholebodySegmenter,
     class_ids_from_names,
     clip_mask_to_box,

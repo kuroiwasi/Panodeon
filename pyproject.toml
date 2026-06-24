@@ -1,7 +1,7 @@
 [project]
-name = "colmap-mask"
+name = "panodeon"
 version = "0.1.0"
-description = "Generate editable person masks and COLMAP perspective tiles from equirectangular panorama images."
+description = "PanoSfM toolkit: turn 360 panoramas and video into COLMAP-ready perspective tiles and masks for Structure-from-Motion."
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.26",
@@ -26,10 +26,10 @@ dev = [
 ]
 
 [project.scripts]
-colmap-mask = "colmap_mask.app:main"
-colmap-mask-run-colmap = "colmap_mask.tools.run_colmap:main"
-colmap-mask-sample = "colmap_mask.sampler.cli:main"
-colmap-mask-sample-video = "colmap_mask.sampler.video_cli:main"
+panodeon = "panodeon.app:main"
+panodeon-run-colmap = "panodeon.tools.run_colmap:main"
+panodeon-sample = "panodeon.sampler.cli:main"
+panodeon-sample-video = "panodeon.sampler.video_cli:main"
 
 [build-system]
 requires = ["setuptools>=68"]

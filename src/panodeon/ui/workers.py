@@ -5,7 +5,7 @@ from typing import Callable
 
 from PySide6.QtCore import QObject, Signal, Slot
 
-from colmap_mask.generators.base import JobCancelled
+from panodeon.generators.base import JobCancelled
 
 
 class TaskWorker(QObject):

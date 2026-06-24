@@ -9,8 +9,8 @@ import threading
 import numpy as np
 import pytest
 
-from colmap_mask.generators.base import JobCancelled, MaskOptions
-from colmap_mask.generators.subprocess_cubemap import (
+from panodeon.generators.base import JobCancelled, MaskOptions
+from panodeon.generators.subprocess_cubemap import (
     PersistentCubemapGenerator,
     SubprocessCubemapGenerator,
     describe_returncode,

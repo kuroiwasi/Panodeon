@@ -8,9 +8,9 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from colmap_mask.core.image_io import load_mask, load_rgb, save_mask, save_rgb
-from colmap_mask.core.project_state import ImageItem
-from colmap_mask.projection.perspective import (
+from panodeon.core.image_io import load_mask, load_rgb, save_mask, save_rgb
+from panodeon.core.project_state import ImageItem
+from panodeon.projection.perspective import (
     camera_rotation,
     equirect_to_perspective,
     perspective_world_directions,

@@ -6,7 +6,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from colmap_mask.core.video_extract import extract_video_frames, is_video_path
+from panodeon.core.video_extract import extract_video_frames, is_video_path
 
 
 def test_is_video_path_accepts_video_extensions(tmp_path: Path) -> None:

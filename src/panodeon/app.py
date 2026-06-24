@@ -4,7 +4,7 @@ import sys
 
 from PySide6.QtWidgets import QApplication
 
-from colmap_mask.ui.main_window import MainWindow
+from panodeon.ui.main_window import MainWindow
 
 
 def main() -> int:

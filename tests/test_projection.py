@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from colmap_mask.projection.cubemap import equirect_to_face, face_to_equirect_mask
-from colmap_mask.projection.perspective import equirect_to_perspective
+from panodeon.projection.cubemap import equirect_to_face, face_to_equirect_mask
+from panodeon.projection.perspective import equirect_to_perspective
 
 
 def test_equirect_to_face_shape() -> None:

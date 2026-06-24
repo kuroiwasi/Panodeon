@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from colmap_mask.inference import providers as provider_module
-from colmap_mask.inference.providers import (
+from panodeon.inference import providers as provider_module
+from panodeon.inference.providers import (
     add_nvidia_dll_directories,
     nvidia_dll_directories,
     provider_dependencies_available,

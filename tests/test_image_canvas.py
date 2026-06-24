@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from colmap_mask.ui.image_canvas import build_stroke_mask
+from panodeon.ui.image_canvas import build_stroke_mask
 
 
 def test_build_stroke_mask_draws_line() -> None:

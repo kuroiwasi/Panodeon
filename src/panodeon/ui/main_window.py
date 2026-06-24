@@ -38,19 +38,19 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from colmap_mask.core.colmap_export import ColmapExportSettings, export_item_for_colmap, write_colmap_metadata
-from colmap_mask.core.image_io import IMAGE_EXTENSIONS, load_mask, load_rgb, save_mask
-from colmap_mask.core.mask_ops import mask_area
-from colmap_mask.core.overlay import overlay_mask
-from colmap_mask.core.project_state import ImageItem, ProjectState
-from colmap_mask.core.video_extract import extract_video_frames, is_video_path
-from colmap_mask.generators.base import MaskOptions
-from colmap_mask.generators.cubemap import CubemapGenerator, merge_compare_masks
-from colmap_mask.generators.direct import DirectEquirectangularGenerator
-from colmap_mask.generators.subprocess_cubemap import PersistentCubemapGenerator
-from colmap_mask.inference.deim_wholebody import DeimWholebodySegmenter
-from colmap_mask.inference.providers import available_onnx_providers, provider_label, resolve_execution_providers, selectable_onnx_providers
-from colmap_mask.tools.run_colmap import (
+from panodeon.core.colmap_export import ColmapExportSettings, export_item_for_colmap, write_colmap_metadata
+from panodeon.core.image_io import IMAGE_EXTENSIONS, load_mask, load_rgb, save_mask
+from panodeon.core.mask_ops import mask_area
+from panodeon.core.overlay import overlay_mask
+from panodeon.core.project_state import ImageItem, ProjectState
+from panodeon.core.video_extract import extract_video_frames, is_video_path
+from panodeon.generators.base import MaskOptions
+from panodeon.generators.cubemap import CubemapGenerator, merge_compare_masks
+from panodeon.generators.direct import DirectEquirectangularGenerator
+from panodeon.generators.subprocess_cubemap import PersistentCubemapGenerator
+from panodeon.inference.deim_wholebody import DeimWholebodySegmenter
+from panodeon.inference.providers import available_onnx_providers, provider_label, resolve_execution_providers, selectable_onnx_providers
+from panodeon.tools.run_colmap import (
     ColmapRunSettings,
     ColmapStep,
     build_colmap_steps,
@@ -63,16 +63,16 @@ from colmap_mask.tools.run_colmap import (
     sparse_model_exists,
     validate_export_dir,
 )
-from colmap_mask.sampler import events as sampler_events
-from colmap_mask.sampler.workflow import (
+from panodeon.sampler import events as sampler_events
+from panodeon.sampler.workflow import (
     PipelineSettings,
     PipelineStep,
     build_pipeline_steps,
     project_root as sampler_project_root,
 )
-from colmap_mask.sampler.resume import load_workflow_state, step_is_complete, step_key, step_signature
-from colmap_mask.ui.image_canvas import ImageCanvas
-from colmap_mask.ui.workers import TaskWorker
+from panodeon.sampler.resume import load_workflow_state, step_is_complete, step_key, step_signature
+from panodeon.ui.image_canvas import ImageCanvas
+from panodeon.ui.workers import TaskWorker
 
 
 MODERN_STYLE = """
@@ -280,7 +280,7 @@ QLabel {
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("360 Colmap Mask")
+        self.setWindowTitle("Panodeon")
         self.setAcceptDrops(True)
         self.setStyleSheet(MODERN_STYLE)
         self.state = ProjectState()

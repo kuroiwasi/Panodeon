@@ -93,8 +93,8 @@ def project_root() -> Path:
     configured = os.environ.get("FRAME_SAMPLER_ROOT")
     if configured:
         return Path(configured).resolve()
-    # Vendored layout: this module lives at <root>/src/colmap_mask/sampler/workflow.py,
-    # so the colmap_mask project root (holding pyproject.toml and third_party/) is parents[4].
+    # Vendored layout: this module lives at <root>/src/panodeon/sampler/workflow.py,
+    # so the panodeon project root (holding pyproject.toml and third_party/) is parents[4].
     source_root = Path(__file__).resolve().parents[4]
     if (source_root / "pyproject.toml").is_file():
         return source_root
@@ -125,7 +125,7 @@ def build_pipeline_steps(
     proxy_command = [
         python,
         "-m",
-        "colmap_mask.sampler.video_cli",
+        "panodeon.sampler.video_cli",
         "create-proxy",
         "--video",
         str(settings.video_path.resolve()),
@@ -146,7 +146,7 @@ def build_pipeline_steps(
     stella_command = [
         python,
         "-m",
-        "colmap_mask.sampler.video_cli",
+        "panodeon.sampler.video_cli",
         "run-stella",
         "--video",
         str(proxy_video),
@@ -167,7 +167,7 @@ def build_pipeline_steps(
     sample_command = [
         python,
         "-m",
-        "colmap_mask.sampler.cli",
+        "panodeon.sampler.cli",
         "sample",
         "--trajectory",
         str(stella_output / "trajectory.csv"),
@@ -183,7 +183,7 @@ def build_pipeline_steps(
     extract_command = [
         python,
         "-m",
-        "colmap_mask.sampler.video_cli",
+        "panodeon.sampler.video_cli",
         "extract",
         "--video",
         str(settings.video_path.resolve()),

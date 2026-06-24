@@ -8,10 +8,10 @@ from pathlib import Path
 
 import numpy as np
 
-from colmap_mask.generators.cubemap import CubemapGenerator
-from colmap_mask.generators.subprocess_cubemap import mask_options_from_json
-from colmap_mask.inference.deim_wholebody import DeimWholebodySegmenter
-from colmap_mask.inference.providers import resolve_execution_providers
+from panodeon.generators.cubemap import CubemapGenerator
+from panodeon.generators.subprocess_cubemap import mask_options_from_json
+from panodeon.inference.deim_wholebody import DeimWholebodySegmenter
+from panodeon.inference.providers import resolve_execution_providers
 
 
 def emit(payload: dict[str, object]) -> None:

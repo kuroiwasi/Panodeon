@@ -2,13 +2,13 @@ import csv
 import json
 from pathlib import Path
 
-from colmap_mask.sampler.resume import (
+from panodeon.sampler.resume import (
     load_workflow_state,
     step_is_complete,
     step_key,
     step_signature,
 )
-from colmap_mask.sampler.workflow import PipelineSettings, build_pipeline_steps
+from panodeon.sampler.workflow import PipelineSettings, build_pipeline_steps
 
 
 def _settings(tmp_path: Path) -> PipelineSettings:
@@ -27,12 +27,12 @@ def test_steps_invoke_vendored_modules(tmp_path):
 
     joined = ["\n".join(step.command) for step in steps]
     # Every step shells out to the vendored package, never the old standalone one.
-    assert all("colmap_mask.sampler" in cmd for cmd in joined)
+    assert all("panodeon.sampler" in cmd for cmd in joined)
     assert "frame_sampler." not in "".join(joined)
-    assert "colmap_mask.sampler.video_cli\ncreate-proxy" in joined[0]
-    assert "colmap_mask.sampler.video_cli\nrun-stella" in joined[1]
-    assert "colmap_mask.sampler.cli\nsample" in joined[2]
-    assert "colmap_mask.sampler.video_cli\nextract" in joined[3]
+    assert "panodeon.sampler.video_cli\ncreate-proxy" in joined[0]
+    assert "panodeon.sampler.video_cli\nrun-stella" in joined[1]
+    assert "panodeon.sampler.cli\nsample" in joined[2]
+    assert "panodeon.sampler.video_cli\nextract" in joined[3]
 
     # Progress slices are contiguous and span the full bar.
     assert steps[0].progress_start == 0.0

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
 
-from colmap_mask.ui.main_window import (
+from panodeon.ui.main_window import (
     MainWindow,
     colmap_image_mask_counts,
     colmap_pipeline_status,

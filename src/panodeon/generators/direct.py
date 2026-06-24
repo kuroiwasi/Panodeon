@@ -4,7 +4,7 @@ from time import perf_counter
 
 import numpy as np
 
-from colmap_mask.core.mask_ops import postprocess_mask
+from panodeon.core.mask_ops import postprocess_mask
 
 from .base import MaskOptions, MaskResult, Segmenter
 

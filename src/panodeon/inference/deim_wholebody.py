@@ -6,8 +6,8 @@ import re
 import cv2
 import numpy as np
 
-from colmap_mask.generators.base import MaskOptions
-from colmap_mask.inference.providers import preload_dlls_for_providers, resolve_execution_providers, session_provider_options
+from panodeon.generators.base import MaskOptions
+from panodeon.inference.providers import preload_dlls_for_providers, resolve_execution_providers, session_provider_options
 
 CLASS_NAME_TO_ID = {
     "body": 0,

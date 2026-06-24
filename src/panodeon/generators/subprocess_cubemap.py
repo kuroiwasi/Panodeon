@@ -55,7 +55,7 @@ class SubprocessCubemapGenerator:
         provider_name: str,
         progress: CubemapProgress | None,
     ) -> tuple[np.ndarray, dict[str, object]]:
-        with tempfile.TemporaryDirectory(prefix="colmap_mask_cubemap_") as temp_dir_text:
+        with tempfile.TemporaryDirectory(prefix="panodeon_cubemap_") as temp_dir_text:
             temp_dir = Path(temp_dir_text)
             image_path = temp_dir / "image.npy"
             mask_path = temp_dir / "mask.npy"
@@ -63,7 +63,7 @@ class SubprocessCubemapGenerator:
             command = [
                 sys.executable,
                 "-m",
-                "colmap_mask.tools.generate_cubemap_mask",
+                "panodeon.tools.generate_cubemap_mask",
                 "--model",
                 str(self.model_path),
                 "--provider",
@@ -212,7 +212,7 @@ class PersistentCubemapGenerator:
 
     def _temp_path(self, name: str) -> Path:
         if self._temp_dir is None:
-            self._temp_dir = tempfile.mkdtemp(prefix="colmap_mask_cubemap_")
+            self._temp_dir = tempfile.mkdtemp(prefix="panodeon_cubemap_")
         return Path(self._temp_dir) / name
 
     def _ensure_process(self, cancel_event: threading.Event | None = None) -> None:
@@ -223,7 +223,7 @@ class PersistentCubemapGenerator:
         command = [
             sys.executable,
             "-m",
-            "colmap_mask.tools.cubemap_worker",
+            "panodeon.tools.cubemap_worker",
             "--model",
             str(self.model_path),
             "--provider",

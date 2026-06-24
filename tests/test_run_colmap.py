@@ -3,8 +3,8 @@ from __future__ import annotations
 import math
 import sqlite3
 
-from colmap_mask.core.colmap_export import virtual_cameras
-from colmap_mask.tools.run_colmap import (
+from panodeon.core.colmap_export import virtual_cameras
+from panodeon.tools.run_colmap import (
     ColmapGpuOptions,
     ColmapMapperOptions,
     ColmapRunSettings,
@@ -109,7 +109,7 @@ def test_select_supported_options_prefers_new_colmap_option_names(monkeypatch) -
     def fake_help(colmap: str, command: str) -> str:
         return "--FeatureExtraction.use_gpu\n--FeatureExtraction.gpu_index\n--SiftExtraction.use_gpu\n--SiftExtraction.gpu_index"
 
-    monkeypatch.setattr("colmap_mask.tools.run_colmap.colmap_command_help", fake_help)
+    monkeypatch.setattr("panodeon.tools.run_colmap.colmap_command_help", fake_help)
     assert select_supported_options(
         "colmap",
         "feature_extractor",
@@ -237,7 +237,7 @@ def test_detect_colmap_mapper_options_prefers_current_name(monkeypatch) -> None:
             "--Mapper.ba_refine_sensor_from_rig"
         )
 
-    monkeypatch.setattr("colmap_mask.tools.run_colmap.colmap_command_help", fake_help)
+    monkeypatch.setattr("panodeon.tools.run_colmap.colmap_command_help", fake_help)
     options = detect_colmap_mapper_options("colmap")
     assert options.ignore_two_view_tracks_option == "--Mapper.tri_ignore_two_view_tracks"
     assert options.snapshot_supported
@@ -248,12 +248,12 @@ def test_detect_colmap_mapper_options_falls_back_to_old_name(monkeypatch) -> Non
     def fake_help(colmap: str, command: str) -> str:
         return "--Mapper.ignore_two_view_tracks"
 
-    monkeypatch.setattr("colmap_mask.tools.run_colmap.colmap_command_help", fake_help)
+    monkeypatch.setattr("panodeon.tools.run_colmap.colmap_command_help", fake_help)
     assert detect_colmap_mapper_options("colmap").ignore_two_view_tracks_option == "--Mapper.ignore_two_view_tracks"
 
 
 def test_detect_colmap_mapper_options_disables_unknown_hierarchical_options(monkeypatch) -> None:
-    monkeypatch.setattr("colmap_mask.tools.run_colmap.colmap_command_help", lambda colmap, command: "")
+    monkeypatch.setattr("panodeon.tools.run_colmap.colmap_command_help", lambda colmap, command: "")
     options = detect_colmap_mapper_options("colmap", "hierarchical_mapper")
     assert options.ignore_two_view_tracks_option is None
     assert not options.snapshot_supported

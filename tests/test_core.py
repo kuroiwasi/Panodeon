@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from colmap_mask.core.mask_ops import normalize_mask, resize_keep_aspect
-from colmap_mask.core.overlay import overlay_mask
+from panodeon.core.mask_ops import normalize_mask, resize_keep_aspect
+from panodeon.core.overlay import overlay_mask
 
 
 def test_normalize_mask_binary() -> None:

@@ -5,9 +5,9 @@ from pathlib import Path
 
 import numpy as np
 
-from colmap_mask.core.colmap_export import ColmapExportSettings, export_item_for_colmap, virtual_cameras, write_colmap_metadata
-from colmap_mask.core.image_io import load_mask, save_mask, save_rgb
-from colmap_mask.core.project_state import ImageItem
+from panodeon.core.colmap_export import ColmapExportSettings, export_item_for_colmap, virtual_cameras, write_colmap_metadata
+from panodeon.core.image_io import load_mask, save_mask, save_rgb
+from panodeon.core.project_state import ImageItem
 
 
 def test_export_item_for_colmap_writes_12_images_and_masks(tmp_path: Path) -> None:
