@@ -4,8 +4,6 @@ The pipeline subprocesses (``panodeon.sampler.cli`` / ``video_cli``) print one
 JSON object per line. These helpers turn those lines into human-readable log text,
 sub-stage labels, and an overall progress fraction. They are deliberately free of
 any Qt dependency so the GUI step runner and unit tests can share them.
-
-Ported from the standalone Tkinter GUI (frame_sampler/gui.py).
 """
 
 from __future__ import annotations

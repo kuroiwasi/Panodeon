@@ -1,4 +1,4 @@
-"""Trajectory-based frame selection for 360-degree video (vendored from 360_frame_sampler).
+"""Trajectory-based frame selection for 360-degree video.
 
 The public dataclasses and ``sample_trajectory`` are re-exported lazily so that
 importing lightweight submodules (``workflow``, ``resume``, ``events``) — as the GUI
