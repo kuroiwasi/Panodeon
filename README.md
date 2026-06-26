@@ -53,3 +53,9 @@ python -m panodeon.app
 ## 使用方法
 
 [docs/usage.md](docs/usage.md) を参照。
+
+## ライセンス
+
+本プロジェクトは MIT ライセンスで提供される。詳細は [LICENSE](LICENSE) を参照。
+
+`patches/` 配下の第三者プロジェクト（stella_vslam など）には、それぞれ独自のライセンスが適用される。詳細は [patches/README.md](patches/README.md) を参照。
