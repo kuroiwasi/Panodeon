@@ -35,7 +35,7 @@ class TrajectoryRecord:
 class SamplingConfig:
     scale_mode: str = "robust_extent"
     radius: float | None = None
-    radius_ratio: float = 0.01
+    radius_ratio: float = 0.1
     target_count: int | None = None
     force_first_frame: bool = True
     force_segment_endpoints: bool = False
@@ -69,7 +69,7 @@ class OrbConfig:
     ransac_threshold: float = 2.0
     # Spherical (tangent-plane) mode: project the equirectangular frame onto
     # several perspective patches before running ORB, avoiding pole distortion.
-    spherical: bool = False
+    spherical: bool = True
     # "cubemap": six orthogonal 90-degree faces covering the whole sphere with
     # no overlap (fewest patches, fastest). "equatorial": a yaw ring at several
     # pitches with overlap (configurable coverage, more patches).

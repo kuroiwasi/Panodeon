@@ -6,7 +6,7 @@
   "sampling": {
     "scale_mode": "robust_extent",
     "radius": null,
-    "radius_ratio": 0.01,
+    "radius_ratio": 0.1,
     "target_count": null,
     "force_first_frame": true,
     "force_segment_endpoints": false,
@@ -27,7 +27,7 @@
       "min_inliers": 40,
       "min_inlier_ratio": 0.2,
       "ransac_threshold": 2.0,
-      "spherical": false,
+      "spherical": true,
       "tangent_layout": "cubemap",
       "tangent_fov_deg": 90.0,
       "tangent_size": 512,

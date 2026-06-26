@@ -8,4 +8,7 @@ third_party/models/*.pt
 masks/
 exports/
 *.egg-info/
-docs/
+docs/*
+!docs/setup.md
+!docs/usage.md
+!docs/config.md
