@@ -97,13 +97,15 @@ if (-not $SkipDependencyInstall) {
     Invoke-Native $VcpkgExe install g2o suitesparse yaml-cpp eigen3 glog opencv sqlite3 --triplet $Triplet
 }
 
+$Generator = "Visual Studio 17 2022"
 $StellaBuild = Join-Path $StellaRoot "build\msvc-x64-static-release"
 $StellaInstall = Join-Path $StellaRoot "install\release"
 $Toolchain = Join-Path $VcpkgRoot "scripts\buildsystems\vcpkg.cmake"
 Invoke-Native cmake `
     -S $StellaRoot `
     -B $StellaBuild `
-    -G "Visual Studio 16 2019" `
+    -G $Generator `
+    -A x64 `
     "-DCMAKE_TOOLCHAIN_FILE=$Toolchain" `
     "-DVCPKG_TARGET_TRIPLET=$Triplet" `
     "-DCMAKE_INSTALL_PREFIX=$StellaInstall" `
@@ -118,7 +120,7 @@ $ExamplesBuild = Join-Path $ExamplesRoot "build"
 Invoke-Native cmake `
     -S $ExamplesRoot `
     -B $ExamplesBuild `
-    -G "Visual Studio 17 2022" `
+    -G $Generator `
     -A x64 `
     "-DCMAKE_TOOLCHAIN_FILE=$Toolchain" `
     "-DVCPKG_TARGET_TRIPLET=$Triplet" `
@@ -155,4 +157,3 @@ $Manifest = [ordered]@{
 }
 $Manifest | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $RuntimeRoot "build_manifest.json")
 Write-Host "Built: $(Join-Path $RuntimeRoot 'run_video_slam.exe')"
-
