@@ -6,6 +6,8 @@ import cv2
 import numpy as np
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
+MASK_DIR_NAMES = {"mask", "masks"}
+MASK_IMAGE_SUFFIXES = (".mask.png", ".mask.direct.png", ".mask.cubemap.png")
 
 
 def find_images(folder: Path, exclude_dirs: tuple[Path, ...] = ()) -> list[Path]:
@@ -15,8 +17,16 @@ def find_images(folder: Path, exclude_dirs: tuple[Path, ...] = ()) -> list[Path]
         for path in folder.rglob("*")
         if path.is_file()
         and path.suffix.lower() in IMAGE_EXTENSIONS
+        and not is_mask_image_path(path)
         and not any(parent in excluded for parent in path.parents)
     )
+
+
+def is_mask_image_path(path: Path) -> bool:
+    name = path.name.lower()
+    if any(name.endswith(suffix) for suffix in MASK_IMAGE_SUFFIXES):
+        return True
+    return any(parent.name.lower() in MASK_DIR_NAMES for parent in path.parents)
 
 
 def load_rgb(path: Path) -> np.ndarray:
