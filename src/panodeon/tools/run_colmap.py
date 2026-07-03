@@ -5,6 +5,7 @@ import math
 import shutil
 import sqlite3
 import subprocess
+from contextlib import closing
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -417,7 +418,7 @@ def database_table_count(database_path: Path, table_name: str) -> int:
     if not database_path.exists():
         return 0
     try:
-        with sqlite3.connect(str(database_path)) as connection:
+        with closing(sqlite3.connect(str(database_path))) as connection:
             row = connection.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
                 (table_name,),

@@ -14,6 +14,7 @@ from panodeon.tools.run_colmap import (
     adjacent_camera_names,
     colmap_command_supports_option,
     database_has_rows,
+    database_table_count,
     dense_model_exists,
     detect_colmap_mapper_options,
     feature_extraction_done,
@@ -284,6 +285,34 @@ def test_database_has_rows_detects_existing_table(tmp_path) -> None:
     assert database_has_rows(database_path, "images")
     assert not database_has_rows(database_path, "matches")
 
+
+def test_database_table_count_closes_connection(tmp_path, monkeypatch) -> None:
+    database_path = tmp_path / 'database.db'
+    database_path.write_bytes(b'')
+
+    class FakeCursor:
+        def __init__(self, value):
+            self.value = value
+
+        def fetchone(self):
+            return self.value
+
+    class FakeConnection:
+        def __init__(self):
+            self.closed = False
+            self.results = [FakeCursor(('images',)), FakeCursor((1,))]
+
+        def execute(self, *args):
+            return self.results.pop(0)
+
+        def close(self):
+            self.closed = True
+
+    connection = FakeConnection()
+    monkeypatch.setattr('panodeon.tools.run_colmap.sqlite3.connect', lambda path: connection)
+
+    assert database_table_count(database_path, 'images') == 1
+    assert connection.closed
 
 def test_feature_extraction_done_requires_keypoints_for_all_images(tmp_path) -> None:
     database_path = tmp_path / "database.db"
