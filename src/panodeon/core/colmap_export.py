@@ -18,7 +18,7 @@ from panodeon.projection.perspective import (
 )
 
 PANORAMA_YAW_STEPS = 4
-PANORAMA_PITCHES_DEG = (-35.0, 0.0, 35.0)
+PANORAMA_PITCHES_DEG = (0.0, -35.0, 35.0)
 
 
 @dataclass(frozen=True)
@@ -109,7 +109,7 @@ def export_item_for_colmap(
 def write_colmap_metadata(export_dir: Path, settings: ColmapExportSettings) -> None:
     export_dir.mkdir(parents=True, exist_ok=True)
     cameras = virtual_cameras()
-    ref_camera = next(camera for camera in cameras if camera.pitch_deg == 0.0)
+    ref_camera = cameras[0]
     payload = [
         {
             "cameras": [camera_config_json(camera, ref_camera) for camera in cameras],

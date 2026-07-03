@@ -63,13 +63,12 @@ def test_write_colmap_metadata_writes_rig_config(tmp_path: Path) -> None:
     write_colmap_metadata(tmp_path, ColmapExportSettings(tile_size=1024, fov_deg=90))
 
     payload = json.loads((tmp_path / "rig_config.json").read_text(encoding="utf-8"))
-    ref_index = next(index for index, camera in enumerate(virtual_cameras()) if camera.pitch_deg == 0.0)
     assert len(payload[0]["cameras"]) == len(virtual_cameras())
     assert payload[0]["cameras"][0]["image_prefix"] == f"{virtual_cameras()[0].name}/"
-    assert "ref_sensor" not in payload[0]["cameras"][0]
-    assert "cam_from_rig_rotation" in payload[0]["cameras"][0]
-    assert payload[0]["cameras"][ref_index]["ref_sensor"] is True
-    assert "cam_from_rig_rotation" not in payload[0]["cameras"][ref_index]
+    assert payload[0]["cameras"][0]["ref_sensor"] is True
+    assert "cam_from_rig_rotation" not in payload[0]["cameras"][0]
+    assert "ref_sensor" not in payload[0]["cameras"][1]
+    assert "cam_from_rig_rotation" in payload[0]["cameras"][1]
     assert (tmp_path / "README_colmap.txt").exists()
 
 
@@ -78,6 +77,8 @@ def test_virtual_cameras_match_official_overlapping_panorama_layout() -> None:
 
     assert len(cameras) == 12
     assert {camera.pitch_deg for camera in cameras} == {-35.0, 0.0, 35.0}
+    assert cameras[0].pitch_deg == 0.0
+    assert [camera.pitch_deg for camera in cameras[:4]] == [0.0, 0.0, 0.0, 0.0]
     assert {camera.yaw_deg for camera in cameras if camera.pitch_deg == -35.0} == {0.0, 90.0, 180.0, 270.0}
     assert {camera.yaw_deg for camera in cameras if camera.pitch_deg == 35.0} == {45.0, 135.0, 225.0, 315.0}
     assert len({camera.name for camera in cameras}) == 12
