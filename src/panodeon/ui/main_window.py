@@ -38,7 +38,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from panodeon.core.colmap_export import ColmapExportSettings, export_item_for_colmap, write_colmap_metadata
+from panodeon.core.colmap_export import (
+    ColmapExportContextCache,
+    ColmapExportSettings,
+    export_item_for_colmap,
+    write_colmap_metadata,
+)
 from panodeon.core.image_io import IMAGE_EXTENSIONS, load_mask, load_rgb, save_mask
 from panodeon.core.mask_ops import mask_area
 from panodeon.core.overlay import overlay_mask
@@ -1414,10 +1419,14 @@ class MainWindow(QMainWindow):
         return ColmapExportSettings(tile_size=self.tile_size_spin.value(), fov_deg=float(self.fov_spin.value()))
 
     def _export_worker(self, worker: TaskWorker, items: list[ImageItem], settings: ColmapExportSettings) -> None:
-        for idx, item in enumerate(items, start=1):
-            worker.raise_if_cancelled()
-            worker.progress.emit(f"Exporting {idx}/{len(items)}: {item.path.name}")
-            self._export_item(item, settings)
+        context_cache = ColmapExportContextCache()
+        try:
+            for idx, item in enumerate(items, start=1):
+                worker.raise_if_cancelled()
+                worker.progress.emit(f"Exporting {idx}/{len(items)}: {item.path.name}")
+                self._export_item(item, settings, context_cache)
+        finally:
+            context_cache.clear()
         if self.state.export_dir is not None:
             write_colmap_metadata(self.state.export_dir, settings)
             self.refresh_colmap_export_info()
@@ -1559,10 +1568,15 @@ class MainWindow(QMainWindow):
         self.generate_all_button.setEnabled(enabled)
         self.generate_all_button.setToolTip(tooltip_all)
 
-    def _export_item(self, item: ImageItem, settings: ColmapExportSettings) -> None:
+    def _export_item(
+        self,
+        item: ImageItem,
+        settings: ColmapExportSettings,
+        context_cache: ColmapExportContextCache | None = None,
+    ) -> None:
         if self.state.export_dir is None:
             return
-        export_item_for_colmap(item, self.state.export_dir, settings)
+        export_item_for_colmap(item, self.state.export_dir, settings, context_cache)
 
     def browse_colmap_executable(self) -> None:
         path_text, _ = QFileDialog.getOpenFileName(self, "Select COLMAP executable")

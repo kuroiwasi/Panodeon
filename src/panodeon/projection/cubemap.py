@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from functools import lru_cache
 
 import cv2
 import numpy as np
@@ -106,13 +107,16 @@ def _face_equirect_bounds(
     return y0, y1, x_ranges
 
 
-def equirect_to_face(
-    image: np.ndarray,
+@lru_cache(maxsize=16)
+def _face_sample_maps(
     face: str,
     face_size: int,
-    fov_deg: float = 90.0,
-) -> np.ndarray:
-    height, width = image.shape[:2]
+    fov_deg: float,
+    width: int,
+    height: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Sample maps depend only on geometry, never image content; stored
+    pre-converted to CV_16SC2 fixed point (half the float32 footprint)."""
     rot = _face_rotation(face)
     half = math.tan(math.radians(fov_deg) * 0.5)
     coords = (np.arange(face_size, dtype=np.float32) + 0.5) / face_size
@@ -123,13 +127,63 @@ def equirect_to_face(
     camera_dirs /= np.linalg.norm(camera_dirs, axis=-1, keepdims=True)
     world_dirs = camera_dirs @ rot.T
     map_x, map_y = _sphere_to_equirect_uv(world_dirs, width, height)
+    map1, map2 = cv2.convertMaps(map_x, map_y, cv2.CV_16SC2)
+    map1.flags.writeable = False
+    map2.flags.writeable = False
+    return map1, map2
+
+
+def equirect_to_face(
+    image: np.ndarray,
+    face: str,
+    face_size: int,
+    fov_deg: float = 90.0,
+) -> np.ndarray:
+    height, width = image.shape[:2]
+    map1, map2 = _face_sample_maps(face, face_size, float(fov_deg), width, height)
     return cv2.remap(
         image,
-        map_x,
-        map_y,
+        map1,
+        map2,
         interpolation=cv2.INTER_LINEAR,
         borderMode=cv2.BORDER_WRAP,
     )
+
+
+@lru_cache(maxsize=8)
+def _face_mask_maps(
+    face: str,
+    width: int,
+    height: int,
+    fov_deg: float,
+    face_h: int,
+    face_w: int,
+) -> tuple[tuple[int, int, int, int, np.ndarray], ...]:
+    """Bounded-region back-projection maps per wrapped column range, as
+    (y_lo, y_hi, x_start, x_end, map1). CV_16SC2 nearest-neighbour form is
+    4 bytes/px (~150-250 MB across 6 faces at 8192x4096), hence the small
+    LRU; map_y fits int16 for equirect heights up to 32k."""
+    rot = _face_rotation(face)
+    half = math.tan(math.radians(fov_deg) * 0.5)
+    y_lo, y_hi, x_ranges = _face_equirect_bounds(face, width, height, fov_deg)
+    entries: list[tuple[int, int, int, int, np.ndarray]] = []
+    for x_start, x_end in x_ranges:
+        dirs = _equirect_dirs_block(width, height, x_start, x_end, y_lo, y_hi)
+        cam = dirs @ rot
+        z = cam[..., 2]
+        valid = z > 1e-6
+        x_norm = cam[..., 0] / np.maximum(z, 1e-6)
+        y_norm = cam[..., 1] / np.maximum(z, 1e-6)
+        valid &= np.abs(x_norm) <= half
+        valid &= np.abs(y_norm) <= half
+        map_x = ((x_norm / half) + 1.0) * 0.5 * face_w - 0.5
+        map_y = (1.0 - ((y_norm / half) + 1.0) * 0.5) * face_h - 0.5
+        map_x = np.where(valid, map_x, -1).astype(np.float32)
+        map_y = np.where(valid, map_y, -1).astype(np.float32)
+        map1, _ = cv2.convertMaps(map_x, map_y, cv2.CV_16SC2, nninterpolation=True)
+        map1.flags.writeable = False
+        entries.append((y_lo, y_hi, x_start, x_end, map1))
+    return tuple(entries)
 
 
 def accumulate_face_mask(
@@ -141,35 +195,19 @@ def accumulate_face_mask(
     """Back-project a cube-face mask into `output` (max-merge, in place)."""
     height, width = output.shape[:2]
     face_h, face_w = face_mask.shape[:2]
-    rot = _face_rotation(face)
-    half = math.tan(math.radians(fov_deg) * 0.5)
-    y_lo, y_hi, x_ranges = _face_equirect_bounds(face, width, height, fov_deg)
-    chunk_rows = 256
-    for x_start, x_end in x_ranges:
-        for y_start in range(y_lo, y_hi, chunk_rows):
-            y_end = min(y_hi, y_start + chunk_rows)
-            dirs = _equirect_dirs_block(width, height, x_start, x_end, y_start, y_end)
-            cam = dirs @ rot
-            z = cam[..., 2]
-            valid = z > 1e-6
-            x_norm = cam[..., 0] / np.maximum(z, 1e-6)
-            y_norm = cam[..., 1] / np.maximum(z, 1e-6)
-            valid &= np.abs(x_norm) <= half
-            valid &= np.abs(y_norm) <= half
-            map_x = ((x_norm / half) + 1.0) * 0.5 * face_w - 0.5
-            map_y = (1.0 - ((y_norm / half) + 1.0) * 0.5) * face_h - 0.5
-            map_x = np.where(valid, map_x, -1).astype(np.float32)
-            map_y = np.where(valid, map_y, -1).astype(np.float32)
-            block = cv2.remap(
-                face_mask,
-                map_x,
-                map_y,
-                interpolation=cv2.INTER_NEAREST,
-                borderMode=cv2.BORDER_CONSTANT,
-                borderValue=0,
-            )
-            target = output[y_start:y_end, x_start:x_end]
-            np.maximum(target, block, out=target)
+    for y_lo, y_hi, x_start, x_end, map1 in _face_mask_maps(
+        face, width, height, float(fov_deg), face_h, face_w
+    ):
+        block = cv2.remap(
+            face_mask,
+            map1,
+            None,
+            interpolation=cv2.INTER_NEAREST,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0,
+        )
+        target = output[y_lo:y_hi, x_start:x_end]
+        np.maximum(target, block, out=target)
 
 
 def face_to_equirect_mask(
