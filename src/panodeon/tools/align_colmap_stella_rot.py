@@ -52,14 +52,14 @@ class AlignmentReport:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Rotate a COLMAP sparse model so its up direction matches stella.")
     parser.add_argument("path", type=Path, help="Project folder, exports folder, or sparse model folder.")
-    parser.add_argument("--trajectory", type=Path, help="stella trajectory.csv. Defaults to <project>/stella/trajectory.csv.")
+    parser.add_argument("--trajectory", type=Path, help="stella trajectory.csv. Defaults to the nearest stella/trajectory.csv above the exports folder.")
     parser.add_argument("--input-model", type=Path, help="Input COLMAP sparse model folder.")
     parser.add_argument("--output-model", type=Path, help="Output model folder. Defaults to exports/sparse_stella_rot/0.")
     parser.add_argument("--overwrite", action="store_true", help="Replace an existing output model folder.")
     args = parser.parse_args()
 
     export_dir, input_model = resolve_export_and_model(args.path, args.input_model)
-    trajectory_path = args.trajectory or export_dir.parent / "stella" / "trajectory.csv"
+    trajectory_path = args.trajectory or find_stella_trajectory(export_dir)
     output_model = args.output_model or export_dir / "sparse_stella_rot" / "0"
     report = align_colmap_model_to_stella_up(input_model, trajectory_path, output_model, overwrite=args.overwrite)
     print(f"input: {report.input_model}")
@@ -78,6 +78,17 @@ def resolve_export_and_model(path: Path, input_model: Path | None) -> tuple[Path
         return export_dir, path
     export_dir = resolve_export_dir(path)
     return export_dir, best_reconstruction_model_dir(export_dir, prefer_rig_ba=True)
+
+
+def find_stella_trajectory(export_dir: Path, extra_bases: tuple[Path, ...] = ()) -> Path:
+    # The sampler writes <output>/stella/trajectory.csv while the UI loads
+    # <output>/frames as the project, so exports sits two levels below <output>.
+    bases = [*extra_bases, export_dir.parent, export_dir.parent.parent]
+    candidates = [Path(base) / "stella" / "trajectory.csv" for base in bases]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return candidates[0]
 
 
 def resolve_export_dir(path: Path) -> Path:

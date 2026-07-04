@@ -64,7 +64,7 @@ from panodeon.tools.run_colmap import (
     sparse_model_exists,
     validate_export_dir,
 )
-from panodeon.tools.align_colmap_stella_rot import align_colmap_model_to_stella_up
+from panodeon.tools.align_colmap_stella_rot import align_colmap_model_to_stella_up, find_stella_trajectory
 from panodeon.sampler import events as sampler_events
 from panodeon.sampler.workflow import (
     PipelineSettings,
@@ -1642,7 +1642,13 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Stella Align", "Export COLMAP data first.")
             return
         export_dir = self.state.export_dir
-        trajectory_path = export_dir.parent / "stella" / "trajectory.csv"
+        extra_bases: list[Path] = []
+        if self.sampler_output_dir is not None:
+            extra_bases.append(self.sampler_output_dir)
+        sampler_output_text = self.sampler_output_edit.text().strip()
+        if sampler_output_text:
+            extra_bases.append(Path(sampler_output_text))
+        trajectory_path = find_stella_trajectory(export_dir, tuple(extra_bases))
         output_model = export_dir / "sparse_stella_rot" / "0"
         overwrite = False
         if output_model.exists():

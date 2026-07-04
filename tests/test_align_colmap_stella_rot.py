@@ -8,6 +8,7 @@ from panodeon.tools.align_colmap_stella_rot import (
     ColmapImage,
     ColmapPoint3D,
     estimate_up_alignment_rotation,
+    find_stella_trajectory,
     qvec_to_rotmat,
     read_images_binary,
     read_points3d_binary,
@@ -33,6 +34,37 @@ def test_load_trajectory_csv_reads_quaternion_columns(tmp_path) -> None:
     assert record.qx == 0.5
     assert record.qy == 0.5
     assert record.qz == 0.5
+
+
+def test_find_stella_trajectory_walks_up_to_sampler_output(tmp_path) -> None:
+    export_dir = tmp_path / "frames" / "exports"
+    export_dir.mkdir(parents=True)
+    trajectory = tmp_path / "stella" / "trajectory.csv"
+    trajectory.parent.mkdir()
+    trajectory.write_text("", encoding="utf-8")
+
+    assert find_stella_trajectory(export_dir) == trajectory
+
+
+def test_find_stella_trajectory_prefers_extra_bases(tmp_path) -> None:
+    export_dir = tmp_path / "frames" / "exports"
+    export_dir.mkdir(parents=True)
+    project_trajectory = tmp_path / "frames" / "stella" / "trajectory.csv"
+    project_trajectory.parent.mkdir()
+    project_trajectory.write_text("", encoding="utf-8")
+    sampler_output = tmp_path / "video_frames"
+    sampler_trajectory = sampler_output / "stella" / "trajectory.csv"
+    sampler_trajectory.parent.mkdir(parents=True)
+    sampler_trajectory.write_text("", encoding="utf-8")
+
+    assert find_stella_trajectory(export_dir, (sampler_output,)) == sampler_trajectory
+
+
+def test_find_stella_trajectory_defaults_to_first_candidate(tmp_path) -> None:
+    export_dir = tmp_path / "frames" / "exports"
+    export_dir.mkdir(parents=True)
+
+    assert find_stella_trajectory(export_dir) == tmp_path / "frames" / "stella" / "trajectory.csv"
 
 
 def test_estimate_up_alignment_rotation_uses_stella_up() -> None:
