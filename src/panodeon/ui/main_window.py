@@ -63,6 +63,7 @@ from panodeon.tools.run_colmap import (
     sparse_model_exists,
     validate_export_dir,
 )
+from panodeon.tools.align_colmap_stella_rot import align_colmap_model_to_stella_up
 from panodeon.sampler import events as sampler_events
 from panodeon.sampler.workflow import (
     PipelineSettings,
@@ -515,6 +516,7 @@ class MainWindow(QMainWindow):
         self.colmap_log.setMaximumHeight(120)
         self.run_colmap_button = QPushButton("Run COLMAP")
         self.run_colmap_button.setObjectName("primaryButton")
+        self.align_stella_button = QPushButton("Align Stella Up")
 
         layout_colmap.addRow("Executable", colmap_path_layout)
         layout_colmap.addRow("Matcher", self.colmap_matcher_combo)
@@ -536,6 +538,7 @@ class MainWindow(QMainWindow):
         layout_colmap.addRow("Stage", self.colmap_stage_label)
         layout_colmap.addRow("Log", self.colmap_log)
         layout_colmap.addRow("", self.run_colmap_button)
+        layout_colmap.addRow("", self.align_stella_button)
         colmap_layout.addWidget(group_colmap)
 
         group_colmap_status = QGroupBox("COLMAP Status")
@@ -550,6 +553,7 @@ class MainWindow(QMainWindow):
         self.colmap_rig_ba_status_label = QLabel("-")
         self.colmap_dense_status_label = QLabel("-")
         self.colmap_snapshot_status_label = QLabel("-")
+        self.colmap_stella_rot_status_label = QLabel("-")
         for label in (
             self.colmap_export_status_label,
             self.colmap_feature_status_label,
@@ -559,6 +563,7 @@ class MainWindow(QMainWindow):
             self.colmap_rig_ba_status_label,
             self.colmap_dense_status_label,
             self.colmap_snapshot_status_label,
+            self.colmap_stella_rot_status_label,
         ):
             label.setWordWrap(True)
         layout_colmap_status.addRow("Resume From", self.colmap_resume_label)
@@ -571,6 +576,7 @@ class MainWindow(QMainWindow):
         layout_colmap_status.addRow("Rig BA", self.colmap_rig_ba_status_label)
         layout_colmap_status.addRow("Dense", self.colmap_dense_status_label)
         layout_colmap_status.addRow("Snapshots", self.colmap_snapshot_status_label)
+        layout_colmap_status.addRow("Stella Rot", self.colmap_stella_rot_status_label)
         colmap_layout.addWidget(group_colmap_status)
         colmap_layout.addStretch()
 
@@ -653,6 +659,7 @@ class MainWindow(QMainWindow):
         self.export_all_button.clicked.connect(self.export_all)
         self.colmap_browse_button.clicked.connect(self.browse_colmap_executable)
         self.run_colmap_button.clicked.connect(self.run_colmap_gui)
+        self.align_stella_button.clicked.connect(self.align_colmap_to_stella_up)
         self.colmap_overwrite_check.stateChanged.connect(lambda value: self.refresh_colmap_export_info())
         self.colmap_skip_completed_check.stateChanged.connect(lambda value: self.refresh_colmap_export_info())
         self.colmap_rig_ba_check.stateChanged.connect(lambda value: self.refresh_colmap_export_info())
@@ -1065,6 +1072,7 @@ class MainWindow(QMainWindow):
         self.colmap_snapshot_check.setToolTip("Save mapper snapshot models under exports/snapshots during sparse mapping.")
         self.colmap_snapshot_freq_spin.setToolTip("Save a mapper snapshot every N newly registered images.")
         self.run_colmap_button.setToolTip("Run COLMAP on the current exports folder.")
+        self.align_stella_button.setToolTip("Create exports/sparse_stella_rot/0 by rotating the sparse model to stella up.")
         self.image_list.setToolTip("Images found in the selected folder.")
         self.canvas.setToolTip("Preview canvas. Wheel to zoom. Draw with left mouse button.")
         self.sampler_video_edit.setToolTip("360 video to sample frames from.")
@@ -1499,6 +1507,7 @@ class MainWindow(QMainWindow):
             self.export_selected_button,
             self.export_all_button,
             self.run_colmap_button,
+            self.align_stella_button,
             self.colmap_browse_button,
             self.colmap_path_edit,
             self.colmap_matcher_combo,
@@ -1626,6 +1635,34 @@ class MainWindow(QMainWindow):
         self.colmap_snapshot_status_label.setText(
             f"{status.snapshot_count} snapshots | latest {status.snapshot_registered_count} registered"
         )
+
+    def align_colmap_to_stella_up(self) -> None:
+        if self.state.export_dir is None:
+            QMessageBox.warning(self, "Stella Align", "Export COLMAP data first.")
+            return
+        export_dir = self.state.export_dir
+        trajectory_path = export_dir.parent / "stella" / "trajectory.csv"
+        output_model = export_dir / "sparse_stella_rot" / "0"
+        overwrite = False
+        if output_model.exists():
+            reply = QMessageBox.question(
+                self,
+                "Stella Align",
+                f"Replace existing aligned model?\n{output_model}",
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+            overwrite = True
+        try:
+            report = align_colmap_model_to_stella_up(export_dir, trajectory_path, output_model, overwrite=overwrite)
+        except Exception as exc:
+            QMessageBox.warning(self, "Stella Align", str(exc))
+            return
+        self.append_colmap_log(
+            f"Stella up alignment wrote {report.output_model} | matched {report.image_pairs} images | angle {report.angle_deg:.3f} deg"
+        )
+        self.status_label.setText("Stella alignment finished")
+        self.refresh_colmap_export_info()
 
     def run_colmap_gui(self) -> None:
         if self.colmap_process is not None or self.worker_thread is not None:

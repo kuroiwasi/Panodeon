@@ -29,6 +29,7 @@ dev = [
 
 [project.scripts]
 panodeon = "panodeon.app:main"
+panodeon-align-colmap-stella-rot = "panodeon.tools.align_colmap_stella_rot:main"
 panodeon-run-colmap = "panodeon.tools.run_colmap:main"
 panodeon-sample = "panodeon.sampler.cli:main"
 panodeon-sample-video = "panodeon.sampler.video_cli:main"

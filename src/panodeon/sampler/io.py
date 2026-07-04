@@ -166,6 +166,10 @@ def _trajectory_record(row: dict[str, str], line_number: int) -> TrajectoryRecor
             tracking_state=(row.get("tracking_state") or "good").strip().lower(),
             candidate_valid=_parse_bool(row.get("candidate_valid"), default=True),
             quality_score=float(row.get("quality_score") or 0.0),
+            qw=_optional_float(row.get("qw")),
+            qx=_optional_float(row.get("qx")),
+            qy=_optional_float(row.get("qy")),
+            qz=_optional_float(row.get("qz")),
         )
     except (TypeError, ValueError) as exc:
         raise ValueError(f"Invalid trajectory row {line_number}: {exc}") from exc
