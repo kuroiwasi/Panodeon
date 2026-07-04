@@ -53,7 +53,6 @@ from panodeon.inference.providers import available_onnx_providers, provider_labe
 from panodeon.tools.run_colmap import (
     ColmapRunSettings,
     ColmapStep,
-    best_reconstruction_model_dir,
     build_colmap_steps,
     database_has_rows,
     detect_colmap_gpu_options,
@@ -64,7 +63,7 @@ from panodeon.tools.run_colmap import (
     sparse_model_exists,
     validate_export_dir,
 )
-from panodeon.tools.align_colmap_stella_rot import align_colmap_model_to_stella_up, find_stella_trajectory
+from panodeon.tools.align_colmap_stella_rot import align_export_sparse_to_stella_up, find_stella_trajectory, sparse_is_stella_aligned
 from panodeon.sampler import events as sampler_events
 from panodeon.sampler.workflow import (
     PipelineSettings,
@@ -1063,7 +1062,9 @@ class MainWindow(QMainWindow):
         self.colmap_browse_button.setToolTip("Select colmap.exe.")
         self.colmap_matcher_combo.setToolTip("COLMAP matcher command.")
         self.colmap_sparse_mapper_combo.setToolTip("Sparse reconstruction command. hierarchical_mapper is experimental for large datasets.")
-        self.colmap_overwrite_check.setToolTip("Delete existing database.db, sparse, and selected dense outputs before running COLMAP.")
+        self.colmap_overwrite_check.setToolTip(
+            "Delete existing database.db, sparse, sparse_orig, and selected dense outputs before running COLMAP."
+        )
         self.colmap_skip_completed_check.setToolTip("Skip steps with existing COLMAP outputs. This takes priority over overwrite.")
         self.colmap_skip_mapping_check.setToolTip("Stop after feature extraction, rig configuration, and matching.")
         self.colmap_rig_ba_check.setToolTip("Run bundle_adjuster after sparse mapping and keep output under exports/sparse_rig_ba.")
@@ -1073,7 +1074,9 @@ class MainWindow(QMainWindow):
         self.colmap_snapshot_check.setToolTip("Save mapper snapshot models under exports/snapshots during sparse mapping.")
         self.colmap_snapshot_freq_spin.setToolTip("Save a mapper snapshot every N newly registered images.")
         self.run_colmap_button.setToolTip("Run COLMAP on the current exports folder.")
-        self.align_stella_button.setToolTip("Create exports/sparse_stella_rot/0 by rotating the sparse model to stella up.")
+        self.align_stella_button.setToolTip(
+            "Back up exports/sparse to exports/sparse_orig and write the model rotated to stella up into exports/sparse/0."
+        )
         self.image_list.setToolTip("Images found in the selected folder.")
         self.canvas.setToolTip("Preview canvas. Wheel to zoom. Draw with left mouse button.")
         self.sampler_video_edit.setToolTip("360 video to sample frames from.")
@@ -1649,20 +1652,19 @@ class MainWindow(QMainWindow):
         if sampler_output_text:
             extra_bases.append(Path(sampler_output_text))
         trajectory_path = find_stella_trajectory(export_dir, tuple(extra_bases))
-        output_model = export_dir / "sparse_stella_rot" / "0"
+        sparse_dir = export_dir / "sparse"
         overwrite = False
-        if output_model.exists():
+        if sparse_is_stella_aligned(sparse_dir):
             reply = QMessageBox.question(
                 self,
                 "Stella Align",
-                f"Replace existing aligned model?\n{output_model}",
+                f"Replace existing aligned model?\n{sparse_dir / '0'}",
             )
             if reply != QMessageBox.StandardButton.Yes:
                 return
             overwrite = True
         try:
-            input_model = best_reconstruction_model_dir(export_dir, prefer_rig_ba=True)
-            report = align_colmap_model_to_stella_up(input_model, trajectory_path, output_model, overwrite=overwrite)
+            report = align_export_sparse_to_stella_up(export_dir, trajectory_path, overwrite=overwrite)
         except Exception as exc:
             QMessageBox.warning(self, "Stella Align", str(exc))
             return
@@ -1731,6 +1733,7 @@ class MainWindow(QMainWindow):
     def prepare_colmap_output(self, export_dir: Path) -> None:
         database_path = export_dir / "database.db"
         sparse_dir = export_dir / "sparse"
+        sparse_orig_dir = export_dir / "sparse_orig"
         rig_ba_dir = export_dir / "sparse_rig_ba"
         dense_dir = export_dir / "dense"
         snapshot_dir = export_dir / "snapshots"
@@ -1739,6 +1742,8 @@ class MainWindow(QMainWindow):
                 database_path.unlink()
             if sparse_dir.exists():
                 shutil.rmtree(sparse_dir)
+            if sparse_orig_dir.exists():
+                shutil.rmtree(sparse_orig_dir)
             if self.colmap_rig_ba_check.isChecked() and rig_ba_dir.exists():
                 shutil.rmtree(rig_ba_dir)
             if self.colmap_dense_check.isChecked() and dense_dir.exists():

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import re
 import shutil
@@ -10,16 +11,12 @@ from pathlib import Path
 
 import numpy as np
 
-from panodeon.core.colmap_export import (
-    PANORAMA_YAW_STEPS,
-    VirtualCamera,
-    direction_from_yaw_pitch,
-    virtual_cameras,
-    world_from_colmap_camera,
-)
+from panodeon.core.colmap_export import virtual_cameras, world_from_colmap_camera
 from panodeon.sampler.io import load_trajectory_csv
 from panodeon.sampler.models import TrajectoryRecord
-from panodeon.tools.run_colmap import best_reconstruction_model_dir, model_files_exist
+from panodeon.tools.run_colmap import best_sparse_model_dir, model_files_exist, sparse_model_exists
+
+STELLA_ALIGNMENT_MARKER = "stella_alignment.json"
 
 
 @dataclass(frozen=True)
@@ -54,14 +51,21 @@ def main() -> int:
     parser.add_argument("path", type=Path, help="Project folder, exports folder, or sparse model folder.")
     parser.add_argument("--trajectory", type=Path, help="stella trajectory.csv. Defaults to the nearest stella/trajectory.csv above the exports folder.")
     parser.add_argument("--input-model", type=Path, help="Input COLMAP sparse model folder.")
-    parser.add_argument("--output-model", type=Path, help="Output model folder. Defaults to exports/sparse_stella_rot/0.")
-    parser.add_argument("--overwrite", action="store_true", help="Replace an existing output model folder.")
+    parser.add_argument(
+        "--output-model",
+        type=Path,
+        help="Output model folder. By default exports/sparse is backed up to exports/sparse_orig and the aligned model is written to exports/sparse/0.",
+    )
+    parser.add_argument("--overwrite", action="store_true", help="Replace an existing aligned output model.")
     args = parser.parse_args()
 
     export_dir, input_model = resolve_export_and_model(args.path, args.input_model)
     trajectory_path = args.trajectory or find_stella_trajectory(export_dir)
-    output_model = args.output_model or export_dir / "sparse_stella_rot" / "0"
-    report = align_colmap_model_to_stella_up(input_model, trajectory_path, output_model, overwrite=args.overwrite)
+    if args.output_model is not None:
+        input_model = input_model or default_input_model(export_dir)
+        report = align_colmap_model_to_stella_up(input_model, trajectory_path, args.output_model, overwrite=args.overwrite)
+    else:
+        report = align_export_sparse_to_stella_up(export_dir, trajectory_path, input_model=input_model, overwrite=args.overwrite)
     print(f"input: {report.input_model}")
     print(f"output: {report.output_model}")
     print(f"matched images: {report.image_pairs}")
@@ -69,15 +73,24 @@ def main() -> int:
     return 0
 
 
-def resolve_export_and_model(path: Path, input_model: Path | None) -> tuple[Path, Path]:
+def resolve_export_and_model(path: Path, input_model: Path | None) -> tuple[Path, Path | None]:
     path = path.resolve()
     if input_model is not None:
         return resolve_export_dir(path), input_model.resolve()
     if model_files_exist(path):
-        export_dir = path.parent.parent if path.parent.name in {"sparse", "sparse_rig_ba", "snapshots"} else path.parent
+        export_dir = path.parent.parent if path.parent.name in {"sparse", "sparse_orig", "sparse_rig_ba", "snapshots"} else path.parent
         return export_dir, path
-    export_dir = resolve_export_dir(path)
-    return export_dir, best_reconstruction_model_dir(export_dir, prefer_rig_ba=True)
+    return resolve_export_dir(path), None
+
+
+def default_input_model(export_dir: Path) -> Path:
+    rig_ba_dir = export_dir / "sparse_rig_ba"
+    if sparse_model_exists(rig_ba_dir):
+        return best_sparse_model_dir(rig_ba_dir)
+    orig_dir = export_dir / "sparse_orig"
+    if sparse_model_exists(orig_dir):
+        return best_sparse_model_dir(orig_dir)
+    return best_sparse_model_dir(export_dir / "sparse")
 
 
 def find_stella_trajectory(export_dir: Path, extra_bases: tuple[Path, ...] = ()) -> Path:
@@ -100,6 +113,59 @@ def resolve_export_dir(path: Path) -> Path:
     raise SystemExit(f"Not a Panodeon project, export folder, or COLMAP model folder: {path}")
 
 
+def align_export_sparse_to_stella_up(
+    export_dir: Path,
+    trajectory_path: Path,
+    *,
+    input_model: Path | None = None,
+    overwrite: bool = False,
+) -> AlignmentReport:
+    """Back up exports/sparse to exports/sparse_orig and write the aligned model to exports/sparse/0."""
+    export_dir = export_dir.resolve()
+    sparse_dir = export_dir / "sparse"
+    orig_dir = export_dir / "sparse_orig"
+    renamed = False
+    if sparse_dir.is_dir() and not sparse_is_stella_aligned(sparse_dir):
+        if orig_dir.exists():
+            raise ValueError(
+                f"Both an unaligned {sparse_dir} and {orig_dir} exist. "
+                f"Remove the stale {orig_dir} (or {sparse_dir}) before aligning."
+            )
+        sparse_dir.rename(orig_dir)
+        renamed = True
+        if input_model is not None:
+            input_model = remap_subpath(input_model.resolve(), sparse_dir, orig_dir)
+    if input_model is None:
+        input_model = default_input_model(export_dir)
+    try:
+        report = align_colmap_model_to_stella_up(input_model, trajectory_path, sparse_dir / "0", overwrite=overwrite)
+    except BaseException:
+        if renamed:
+            if sparse_dir.exists():
+                shutil.rmtree(sparse_dir)
+            orig_dir.rename(sparse_dir)
+        raise
+    marker = {
+        "input_model": str(report.input_model),
+        "trajectory": str(trajectory_path),
+        "matched_images": report.image_pairs,
+        "rotation_angle_deg": report.angle_deg,
+    }
+    (sparse_dir / STELLA_ALIGNMENT_MARKER).write_text(json.dumps(marker, indent=2) + "\n", encoding="utf-8")
+    return report
+
+
+def sparse_is_stella_aligned(sparse_dir: Path) -> bool:
+    return (sparse_dir / STELLA_ALIGNMENT_MARKER).is_file()
+
+
+def remap_subpath(path: Path, old_root: Path, new_root: Path) -> Path:
+    try:
+        return new_root / path.relative_to(old_root)
+    except ValueError:
+        return path
+
+
 def align_colmap_model_to_stella_up(
     input_model: Path,
     trajectory_path: Path,
@@ -113,11 +179,10 @@ def align_colmap_model_to_stella_up(
         raise ValueError(f"Missing COLMAP model files: {input_model}")
     if not trajectory_path.is_file():
         raise ValueError(f"Missing stella trajectory: {trajectory_path}")
-    if output_model.exists():
-        if not overwrite:
-            raise ValueError(f"Output model already exists: {output_model}")
-        shutil.rmtree(output_model)
+    if output_model.exists() and not overwrite:
+        raise ValueError(f"Output model already exists: {output_model}")
 
+    cameras_data = (input_model / "cameras.bin").read_bytes()
     images = read_images_binary(input_model / "images.bin")
     points3d = read_points3d_binary(input_model / "points3D.bin")
     trajectory = {record.frame_index: record for record in load_trajectory_csv(trajectory_path)}
@@ -125,8 +190,10 @@ def align_colmap_model_to_stella_up(
     pivot = camera_center_pivot(images)
     translation = pivot - rotation @ pivot
 
+    if output_model.exists():
+        shutil.rmtree(output_model)
     output_model.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(input_model / "cameras.bin", output_model / "cameras.bin")
+    (output_model / "cameras.bin").write_bytes(cameras_data)
     write_images_binary(output_model / "images.bin", rotate_images(images, rotation, translation))
     write_points3d_binary(output_model / "points3D.bin", rotate_points3d(points3d, rotation, translation))
     return AlignmentReport(
@@ -166,31 +233,11 @@ def estimate_up_alignment_rotation(
 
 
 def camera_from_rig_by_name() -> dict[str, np.ndarray]:
-    layouts = (virtual_cameras(), virtual_cameras_for_pitches((-35.0, 0.0, 35.0)))
-    result = {}
-    for cameras in layouts:
-        rig_world_from_camera = world_from_colmap_camera(cameras[0])
-        for camera in cameras:
-            result[camera.name] = world_from_colmap_camera(camera).T @ rig_world_from_camera
-    return result
-
-
-def virtual_cameras_for_pitches(pitches: tuple[float, ...]) -> list[VirtualCamera]:
-    cameras: list[VirtualCamera] = []
-    yaw_step_deg = 360.0 / PANORAMA_YAW_STEPS
-    for pitch_deg in pitches:
-        yaw_offset_deg = yaw_step_deg * 0.5 if pitch_deg > 0.0 else 0.0
-        for yaw_index in range(PANORAMA_YAW_STEPS):
-            yaw_deg = (yaw_index * yaw_step_deg + yaw_offset_deg) % 360.0
-            cameras.append(
-                VirtualCamera(
-                    camera_id=len(cameras) + 1,
-                    yaw_deg=yaw_deg,
-                    pitch_deg=pitch_deg,
-                    direction=direction_from_yaw_pitch(yaw_deg, pitch_deg),
-                )
-            )
-    return cameras
+    cameras = virtual_cameras()
+    # The reference must be the level yaw-0 camera so the rig frame's -Y axis is the panorama up.
+    rig_camera = next(camera for camera in cameras if camera.pitch_deg == 0.0 and camera.yaw_deg == 0.0)
+    rig_world_from_camera = world_from_colmap_camera(rig_camera)
+    return {camera.name: world_from_colmap_camera(camera).T @ rig_world_from_camera for camera in cameras}
 
 
 def frame_index_from_image_name(name: str) -> int | None:

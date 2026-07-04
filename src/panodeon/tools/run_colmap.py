@@ -80,7 +80,7 @@ def main() -> int:
     parser.add_argument("--sparse-mapper", choices=("mapper", "hierarchical_mapper"), default="mapper")
     parser.add_argument("--camera-model", default="PINHOLE")
     parser.add_argument("--camera-neighbors", type=int, default=4, help="Nearest virtual cameras to match across neighboring frames.")
-    parser.add_argument("--overwrite", action="store_true", help="Delete existing database.db and sparse/ before running.")
+    parser.add_argument("--overwrite", action="store_true", help="Delete existing database.db, sparse/, and sparse_orig/ before running.")
     parser.add_argument("--skip-mapping", action="store_true", help="Run only feature extraction, rig setup, and matching.")
     parser.add_argument("--rig-ba", action="store_true", help="Run bundle_adjuster after sparse mapping.")
     parser.add_argument("--dense", action="store_true", help="Run COLMAP dense reconstruction after sparse mapping.")
@@ -105,6 +105,7 @@ def main() -> int:
     validate_export_dir(export_dir)
     database_path = export_dir / "database.db"
     sparse_dir = export_dir / "sparse"
+    sparse_orig_dir = export_dir / "sparse_orig"
     dense_dir = export_dir / "dense"
     rig_ba_dir = export_dir / "sparse_rig_ba"
     mapper_snapshot_path = args.mapper_snapshot_path
@@ -116,6 +117,8 @@ def main() -> int:
             database_path.unlink()
         if sparse_dir.exists():
             shutil.rmtree(sparse_dir)
+        if sparse_orig_dir.exists():
+            shutil.rmtree(sparse_orig_dir)
         if args.rig_ba and rig_ba_dir.exists():
             shutil.rmtree(rig_ba_dir)
         if args.dense and dense_dir.exists():
