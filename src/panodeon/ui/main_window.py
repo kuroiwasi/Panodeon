@@ -53,6 +53,7 @@ from panodeon.inference.providers import available_onnx_providers, provider_labe
 from panodeon.tools.run_colmap import (
     ColmapRunSettings,
     ColmapStep,
+    best_reconstruction_model_dir,
     build_colmap_steps,
     database_has_rows,
     detect_colmap_gpu_options,
@@ -1654,7 +1655,8 @@ class MainWindow(QMainWindow):
                 return
             overwrite = True
         try:
-            report = align_colmap_model_to_stella_up(export_dir, trajectory_path, output_model, overwrite=overwrite)
+            input_model = best_reconstruction_model_dir(export_dir, prefer_rig_ba=True)
+            report = align_colmap_model_to_stella_up(input_model, trajectory_path, output_model, overwrite=overwrite)
         except Exception as exc:
             QMessageBox.warning(self, "Stella Align", str(exc))
             return
